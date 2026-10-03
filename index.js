@@ -90,6 +90,39 @@ function extractToolFilePath(name, args) {
   return null;
 }
 
+function summarizeToolCall(name, args) {
+  if (!args || typeof args !== 'object') return `Thao tác ${name}`;
+  if (name === 'read' || name === 'view') {
+    const f = basename(args.file_path || args.path || '');
+    return f ? `Đọc \`${f}\`` : 'Đọc file';
+  }
+  if (name === 'edit' || name === 'str_replace_editor') {
+    const f = basename(args.file_path || args.path || '');
+    return f ? `Sửa \`${f}\`` : 'Chỉnh sửa file';
+  }
+  if (name === 'write' || name === 'write_file' || name === 'create_file') {
+    const f = basename(args.file_path || args.path || '');
+    return f ? `Tạo \`${f}\`` : 'Ghi file';
+  }
+  if (name === 'bash') {
+    const cmd = truncate(args.command || args.cmd || '', 30);
+    return cmd ? `Chạy \`${cmd}\`` : 'Chạy lệnh bash';
+  }
+  if (name === 'grep' || name === 'glob') {
+    const p = truncate(args.pattern || '', 25);
+    return p ? `Tìm \`${p}\`` : 'Tìm kiếm file';
+  }
+  if (typeof name === 'string' && name.startsWith('mcp__serena__')) {
+    const sub = name.replace('mcp__serena__', '');
+    return `Serena: ${sub}`;
+  }
+  if (typeof name === 'string' && name.startsWith('mcp__codebase-memory__')) {
+    const sub = name.replace('mcp__codebase-memory__', '');
+    return `Graph: ${sub}`;
+  }
+  return `Gọi \`${name}\``;
+}
+
 function splitMessage(text, maxLen = 3800) {
   if (text.length <= maxLen) return [text];
   const chunks = [];
@@ -149,6 +182,11 @@ export function apply(ctx, config = {}) {
         lastPrompt: '',
         modifiedFiles: new Set(),
         toolCallsCount: 0,
+        actionHistory: [],
+        progressMsgId: null,
+        lastProgressUpdateAt: 0,
+        typingTimer: null,
+        updateProgressTimer: null,
       };
       sessionStates.set(sid, s);
     }
@@ -205,7 +243,6 @@ export function apply(ctx, config = {}) {
       });
       const data = await res.json();
       if (!data.ok && data.description?.includes("can't parse entities")) {
-        // Fallback plain text if markdown entity fails
         const fallback = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -224,10 +261,24 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  async function tgEdit(chatId, messageId, text, options = {}) {
-    if (!botToken) return;
+  async function tgSendChatAction(action = 'typing') {
+    if (!botToken || !botChatId) return;
     try {
-      await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
+      await fetch(`https://api.telegram.org/bot${botToken}/sendChatAction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: botChatId,
+          action,
+        }),
+      });
+    } catch {}
+  }
+
+  async function tgEdit(chatId, messageId, text, options = {}) {
+    if (!botToken || !messageId) return null;
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -238,7 +289,24 @@ export function apply(ctx, config = {}) {
           ...options,
         }),
       });
-    } catch {}
+      const data = await res.json();
+      if (!data.ok && data.description?.includes("can't parse entities")) {
+        const fallback = await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            message_id: messageId,
+            text,
+            ...options,
+          }),
+        });
+        return await fallback.json();
+      }
+      return data;
+    } catch {
+      return null;
+    }
   }
 
   async function tgAnswerCallback(queryId, text) {
@@ -602,6 +670,29 @@ export function apply(ctx, config = {}) {
       state.turnStartAt = event.time || Date.now();
       state.modifiedFiles.clear();
       state.toolCallsCount = 0;
+      state.actionHistory = [];
+      state.progressMsgId = null;
+
+      // Start typing indicator loop
+      if (botToken && botChatId) {
+        tgSendChatAction('typing');
+        if (state.typingTimer) clearInterval(state.typingTimer);
+        state.typingTimer = setInterval(() => {
+          tgSendChatAction('typing');
+        }, 4500);
+
+        // Send initial progress card
+        const promptText = state.lastPrompt ? `📝 _"${truncate(state.lastPrompt, 70)}"_\n\n` : '';
+        tgSend(
+          `⚡ *DSH [${project}] đang xử lý...*\n` +
+          promptText +
+          `⏳ *Tiến trình:*\n• Đang phân tích yêu cầu...`,
+        ).then((res) => {
+          if (res?.ok && res.result?.message_id) {
+            state.progressMsgId = res.result.message_id;
+          }
+        });
+      }
     } else if (event.type === 'user/message') {
       let text = '';
       const content = event.data?.content;
@@ -643,6 +734,43 @@ export function apply(ctx, config = {}) {
       if (fp && typeof fp === 'string') {
         state.modifiedFiles.add(basename(fp));
       }
+
+      // Record in action history and update live progress card
+      const desc = summarizeToolCall(toolName, args);
+      state.actionHistory.push(desc);
+      if (state.actionHistory.length > 5) {
+        state.actionHistory.shift();
+      }
+
+      if (botToken && botChatId && state.progressMsgId) {
+        const now = Date.now();
+        const scheduleUpdate = () => {
+          state.lastProgressUpdateAt = Date.now();
+          const elapsed = formatDuration(state.lastProgressUpdateAt - state.turnStartAt);
+          const promptText = state.lastPrompt ? `📝 _"${truncate(state.lastPrompt, 70)}"_\n\n` : '';
+          const progressList = state.actionHistory.map((act, i) => {
+            return i === state.actionHistory.length - 1 ? `▶ *${act}*...` : `✓ ${act}`;
+          }).join('\n');
+
+          tgEdit(
+            botChatId,
+            state.progressMsgId,
+            `⚡ *DSH [${project}] đang xử lý...* (${elapsed})\n` +
+            promptText +
+            `⏳ *Tiến trình (${state.toolCallsCount} steps):*\n` +
+            progressList,
+          );
+        };
+
+        if (now - state.lastProgressUpdateAt >= 2000) {
+          scheduleUpdate();
+        } else if (!state.updateProgressTimer) {
+          state.updateProgressTimer = setTimeout(() => {
+            state.updateProgressTimer = null;
+            scheduleUpdate();
+          }, 2000 - (now - state.lastProgressUpdateAt));
+        }
+      }
     } else if (event.type === 'approval/asked' && event.data) {
       const tool = event.data.toolName || 'Thao tác';
       const reason = event.data.reason ? `Lý do: ${event.data.reason}` : 'Chờ bạn phê duyệt quyền thực thi';
@@ -660,6 +788,16 @@ export function apply(ctx, config = {}) {
       const reason = event.data?.reason;
       const kind = reason?.kind;
       const promptSnippet = state.lastPrompt ? `Yêu cầu: "${truncate(state.lastPrompt, 85)}"` : 'Tác vụ kết thúc.';
+
+      // Stop typing and progress update timers
+      if (state.typingTimer) {
+        clearInterval(state.typingTimer);
+        state.typingTimer = null;
+      }
+      if (state.updateProgressTimer) {
+        clearTimeout(state.updateProgressTimer);
+        state.updateProgressTimer = null;
+      }
 
       // Extract assistant response text
       let assistantText = '';
@@ -702,17 +840,29 @@ export function apply(ctx, config = {}) {
           );
         }
 
-        // 2. Telegram message
+        // 2. Telegram: Update progress card to completed status
         if (botToken && botChatId) {
-          const header = `✅ *DSH [${project}] • Hoàn thành (${duration})*`;
-          const promptLine = state.lastPrompt ? `📝 _"${truncate(state.lastPrompt, 80)}"_\n` : '';
-          const fileLine = fileCount > 0 ? `📁 *File đã sửa:* ${Array.from(state.modifiedFiles).join(', ')}\n` : '';
-          const bodyText = assistantText ? `\n${assistantText}` : '';
-          const fullMessage = `${header}\n${promptLine}${fileLine}${bodyText}`.trim();
+          const fileLine = fileCount > 0 ? `📁 *File đã sửa:* ${Array.from(state.modifiedFiles).join(', ')}` : `⚡ Hoàn tất (${state.toolCallsCount} steps)`;
+          const promptLine = state.lastPrompt ? `📝 _"${truncate(state.lastPrompt, 75)}"_\n` : '';
 
-          const chunks = splitMessage(fullMessage);
-          for (const chunk of chunks) {
-            tgSend(chunk);
+          if (state.progressMsgId) {
+            tgEdit(
+              botChatId,
+              state.progressMsgId,
+              `✅ *DSH [${project}] • Hoàn thành (${duration})*\n` +
+              promptLine +
+              fileLine,
+            );
+          }
+
+          // Send assistant response text (chunked if long)
+          if (assistantText) {
+            const chunks = splitMessage(assistantText);
+            for (const chunk of chunks) {
+              tgSend(chunk);
+            }
+          } else if (!state.progressMsgId) {
+            tgSend(`✅ *DSH [${project}] • Hoàn thành (${duration})*\n${promptLine}${fileLine}`);
           }
         }
       } else if (kind === 'error') {
@@ -730,12 +880,23 @@ export function apply(ctx, config = {}) {
         }
 
         if (botToken && botChatId) {
-          tgSend(
-            `❌ *DSH [${project}] • Thất bại (${duration})*\n\n` +
-            `• *Lỗi*: ${errMsg}\n` +
-            (state.lastPrompt ? `• *Yêu cầu*: _"${truncate(state.lastPrompt, 70)}"_\n` : '') +
-            `• Dừng sau ${state.toolCallsCount} tool calls.`,
-          );
+          if (state.progressMsgId) {
+            tgEdit(
+              botChatId,
+              state.progressMsgId,
+              `❌ *DSH [${project}] • Thất bại (${duration})*\n\n` +
+              `• *Lỗi*: ${errMsg}\n` +
+              (state.lastPrompt ? `• *Yêu cầu*: _"${truncate(state.lastPrompt, 70)}"_\n` : '') +
+              `• Dừng sau ${state.toolCallsCount} steps.`,
+            );
+          } else {
+            tgSend(
+              `❌ *DSH [${project}] • Thất bại (${duration})*\n\n` +
+              `• *Lỗi*: ${errMsg}\n` +
+              (state.lastPrompt ? `• *Yêu cầu*: _"${truncate(state.lastPrompt, 70)}"_\n` : '') +
+              `• Dừng sau ${state.toolCallsCount} steps.`,
+            );
+          }
         }
       } else if (kind === 'aborted') {
         if (soundEnabled) playSound('interrupted', volume, customSounds);
@@ -748,7 +909,11 @@ export function apply(ctx, config = {}) {
         }
 
         if (botToken && botChatId) {
-          tgSend(`🛑 *DSH [${project}] • Đã dừng (${duration})*\n${promptSnippet}`);
+          if (state.progressMsgId) {
+            tgEdit(botChatId, state.progressMsgId, `🛑 *DSH [${project}] • Đã dừng (${duration})*\n${promptSnippet}`);
+          } else {
+            tgSend(`🛑 *DSH [${project}] • Đã dừng (${duration})*\n${promptSnippet}`);
+          }
         }
       } else if (kind === 'max-tokens') {
         if (soundEnabled) playSound('error', volume, customSounds);
@@ -761,7 +926,11 @@ export function apply(ctx, config = {}) {
         }
 
         if (botToken && botChatId) {
-          tgSend(`⚠️ *DSH [${project}] • Hết token (${duration})*\n${promptSnippet}`);
+          if (state.progressMsgId) {
+            tgEdit(botChatId, state.progressMsgId, `⚠️ *DSH [${project}] • Hết token (${duration})*\n${promptSnippet}`);
+          } else {
+            tgSend(`⚠️ *DSH [${project}] • Hết token (${duration})*\n${promptSnippet}`);
+          }
         }
       }
     }
@@ -776,5 +945,5 @@ export function apply(ctx, config = {}) {
     abortController.abort();
   });
 
-  console.info('[dsh-sound-notifier] Active: Sounds + Desktop Notification + 2-way Telegram Bot.');
+  console.info('[dsh-sound-notifier] Active: Sounds + Desktop Notification + 2-way Telegram Bot + Live Progress.');
 }
