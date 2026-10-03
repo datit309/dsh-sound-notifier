@@ -173,6 +173,29 @@ function splitMessage(text, maxLen = 3800) {
   return chunks;
 }
 
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let raw = '';
+    req.on('data', chunk => { raw += chunk; });
+    req.on('end', () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function sendJson(res, statusCode, data) {
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store',
+  });
+  res.end(JSON.stringify(data));
+}
+
 function loadTelegramConfig(config = {}) {
   const home = process.env.DSH_HOME || join(process.env.HOME || '', '.dsh');
   const configFilePath = join(home, 'telegram.json');
@@ -335,6 +358,118 @@ export function apply(ctx, config = {}) {
   // Sync back to telegram.json if provided from Web GUI
   if (readVolatile(config.token)) {
     saveTelegramConfig(botConfigPath, botToken, botChatId);
+  }
+
+  // Register Web API endpoints for Settings UI
+  if (ctx.inject) {
+    ctx.inject(['webServer'], (scope) => {
+      scope.effect(() => {
+        const d1 = scope.webServer.register({
+          kind: 'exact',
+          path: '/api/dsh-sound-notifier/config',
+          handler: async (req, res) => {
+            if (req.method === 'GET') {
+              const effective = loadTelegramConfig(config);
+              let botInfo = null;
+              if (effective.token) {
+                try {
+                  const r = await fetch(`https://api.telegram.org/bot${effective.token}/getMe`);
+                  const d = await r.json();
+                  if (d.ok) botInfo = d.result;
+                } catch {}
+              }
+              sendJson(res, 200, {
+                ok: true,
+                config: {
+                  token: effective.token,
+                  chatId: effective.chatId,
+                  sound: soundEnabled,
+                  notification: notifyEnabled,
+                  volume,
+                },
+                botInfo,
+              });
+              return;
+            }
+
+            if (req.method === 'POST') {
+              try {
+                const body = await readJsonBody(req);
+                const newToken = String(body.token || '').trim();
+                const newChatId = String(body.chatId || '').trim();
+                if (typeof body.sound === 'boolean') soundEnabled = body.sound;
+                if (typeof body.notification === 'boolean') notifyEnabled = body.notification;
+                if (typeof body.volume === 'number') volume = body.volume;
+
+                botToken = newToken;
+                botChatId = newChatId;
+                saveTelegramConfig(botConfigPath, botToken, botChatId);
+
+                let botInfo = null;
+                if (botToken) {
+                  try {
+                    const r = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
+                    const d = await r.json();
+                    if (d.ok) botInfo = d.result;
+                  } catch {}
+                }
+
+                sendJson(res, 200, { ok: true, botInfo });
+              } catch (e) {
+                sendJson(res, 400, { ok: false, error: e.message });
+              }
+              return;
+            }
+
+            sendJson(res, 405, { error: 'Method Not Allowed' });
+          },
+        });
+
+        const d2 = scope.webServer.register({
+          kind: 'exact',
+          path: '/api/dsh-sound-notifier/test',
+          handler: async (req, res) => {
+            if (req.method !== 'POST') {
+              sendJson(res, 405, { error: 'Method Not Allowed' });
+              return;
+            }
+            try {
+              const body = await readJsonBody(req);
+              const testToken = String(body.token || botToken || '').trim();
+              const testChatId = String(body.chatId || botChatId || '').trim();
+
+              if (!testToken || !testChatId) {
+                sendJson(res, 400, { ok: false, error: 'Chưa có Token hoặc Chat ID để kiểm tra.' });
+                return;
+              }
+
+              const r = await fetch(`https://api.telegram.org/bot${testToken}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: testChatId,
+                  text: '🚀 *Tin nhắn kiểm tra từ Giao diện DSH Web GUI!*\nCấu hình Telegram Bot đã hoạt động hoàn hảo.',
+                  parse_mode: 'Markdown',
+                }),
+              });
+              const d = await r.json();
+              if (d.ok) {
+                sendJson(res, 200, { ok: true });
+              } else {
+                sendJson(res, 400, { ok: false, error: d.description || 'Telegram từ chối gửi tin nhắn.' });
+              }
+            } catch (e) {
+              sendJson(res, 500, { ok: false, error: e.message });
+            }
+          },
+        });
+
+        return () => {
+          d1();
+          d2();
+        };
+      }, 'dsh-sound-notifier: webServer API routes');
+    });
   }
 
   const pendingApprovals = new Map(); // id -> resolve
