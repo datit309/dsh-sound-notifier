@@ -163,6 +163,28 @@ function saveTelegramConfig(filePath, token, chatId) {
   }
 }
 
+function getSessionSummary(session) {
+  if (!session) return { id: 'none', project: 'DSH', prompt: '' };
+  const project = getProjectName(session);
+  let firstPrompt = '';
+  try {
+    const events = session.snapshotEvents();
+    for (const ev of events) {
+      if (ev.type === 'user/message') {
+        const c = ev.data?.content;
+        if (typeof c === 'string') firstPrompt = c;
+        else if (Array.isArray(c)) firstPrompt = c.map(p => (typeof p === 'string' ? p : p.text || '')).join(' ');
+        if (firstPrompt) break;
+      }
+    }
+  } catch {}
+  return {
+    id: session.id,
+    project,
+    prompt: firstPrompt ? truncate(firstPrompt, 40) : '',
+  };
+}
+
 export function apply(ctx, config = {}) {
   const soundEnabled = config.sound !== false;
   const notifyEnabled = config.notification !== false;
@@ -171,6 +193,7 @@ export function apply(ctx, config = {}) {
 
   // Per-session tracking
   const sessionStates = new Map();
+  let selectedSessionId = null;
   let lastActiveSessionId = null;
 
   function getSessionState(sid) {
@@ -194,6 +217,10 @@ export function apply(ctx, config = {}) {
   }
 
   function getActiveSession() {
+    if (selectedSessionId) {
+      const s = ctx.sessions?.get(selectedSessionId);
+      if (s) return s;
+    }
     if (lastActiveSessionId) {
       const s = ctx.sessions?.get(lastActiveSessionId);
       if (s) return s;
@@ -323,6 +350,45 @@ export function apply(ctx, config = {}) {
     } catch {}
   }
 
+  async function showSessionsListMenu() {
+    const sessions = ctx.sessions?.list?.() || [];
+    if (sessions.length === 0) {
+      await tgSend('ℹ️ Hiện chưa có session nào trong DSH.\nGửi /new để tạo session mới.');
+      return;
+    }
+
+    const current = getActiveSession();
+    const buttons = [];
+    const lines = ['📋 *Danh sách phiên làm việc (Sessions):*\n'];
+
+    sessions.forEach((s, idx) => {
+      const isCurrent = current && current.id === s.id;
+      const summary = getSessionSummary(s);
+      const agent = ctx.agents?.get(s.id);
+      const isRunning = agent?.status === 'running';
+      const statusIcon = isCurrent ? '🟢' : (isRunning ? '⚡' : '⚪️');
+      const statusText = isRunning ? 'Đang chạy' : 'Đang rảnh';
+
+      lines.push(
+        `${statusIcon} *${idx + 1}. [${summary.project}]* \`${s.id}\`${isCurrent ? ' _(Đang chọn)_' : ''}\n` +
+        `   • Trạng thái: ${statusText}` +
+        (summary.prompt ? `\n   • Yêu cầu: _"${summary.prompt}"_` : '') + '\n',
+      );
+
+      const btnLabel = `${statusIcon} ${idx + 1}. [${summary.project}] ${s.id}${isCurrent ? ' ✓' : ''}`;
+      buttons.push([{ text: btnLabel, callback_data: `switch:${s.id}` }]);
+    });
+
+    buttons.push([{ text: '➕ Mở Session Mới', callback_data: 'cmd:new' }]);
+    lines.push('_Bấm nút bên dưới hoặc gõ `/switch <số>` để chuyển session:_');
+
+    await tgSend(lines.join('\n'), {
+      reply_markup: {
+        inline_keyboard: buttons,
+      },
+    });
+  }
+
   // Handle incoming Telegram commands / messages
   async function handleTelegramMessage(msg) {
     const fromId = String(msg.chat.id);
@@ -359,14 +425,54 @@ export function apply(ctx, config = {}) {
         `🤖 *DeepSeek Harness Telegram Bot*\n` +
         `Đã kết nối với DSH trên máy Mac.\n\n` +
         `*Lệnh điều khiển:*\n` +
-        `• /status - Xem trạng thái Agent, Session, Workspace\n` +
-        `• /new - Mở một phiên làm việc (Session) mới\n` +
+        `• /sessions - Xem danh sách & chọn Session chat\n` +
+        `• /switch <số> - Đổi sang Session khác\n` +
+        `• /new - Mở một phiên làm việc mới\n` +
+        `• /status - Xem chi tiết Session đang chọn\n` +
         `• /stop - Dừng khẩn cấp lượt chạy hiện tại\n` +
         `• /files - Xem danh sách file vừa được sửa\n` +
         `• /help - Xem hướng dẫn sử dụng\n\n` +
         `💬 *Gửi prompt từ xa:*\n` +
-        `Gõ bất kỳ tin nhắn nào vào đây, Agent trên máy Mac sẽ nhận lệnh và thực thi ngay.`,
+        `Gõ bất kỳ tin nhắn nào vào đây, Agent trong Session đang chọn sẽ thực thi ngay.`,
       );
+      return;
+    }
+
+    if (text === '/sessions' || text === '/list') {
+      await showSessionsListMenu();
+      return;
+    }
+
+    if (text.startsWith('/switch')) {
+      const parts = text.split(/\s+/);
+      const arg = parts[1];
+      const sessions = ctx.sessions?.list?.() || [];
+
+      if (!arg) {
+        await showSessionsListMenu();
+        return;
+      }
+
+      let target = null;
+      const num = Number.parseInt(arg, 10);
+      if (!Number.isNaN(num) && num >= 1 && num <= sessions.length) {
+        target = sessions[num - 1];
+      } else {
+        target = sessions.find(s => s.id === arg || s.id.toLowerCase() === arg.toLowerCase());
+      }
+
+      if (target) {
+        selectedSessionId = target.id;
+        const summary = getSessionSummary(target);
+        await tgSend(
+          `✅ *Đã chuyển sang session:*\n` +
+          `• *Project*: \`${summary.project}\`\n` +
+          `• *ID*: \`${target.id}\`\n` +
+          `Mọi prompt bạn gửi tiếp theo sẽ chạy trong session này.`,
+        );
+      } else {
+        await tgSend(`❌ Không tìm thấy session "${arg}". Gõ /sessions để xem danh sách.`);
+      }
       return;
     }
 
@@ -381,10 +487,11 @@ export function apply(ctx, config = {}) {
       await tgSend(
         `📊 *Trạng thái DeepSeek Harness*\n\n` +
         `• *Project*: \`${project}\`\n` +
-        `• *Session*: \`${session?.id || 'Không có'}\`\n` +
+        `• *Session đang chọn*: \`${session?.id || 'Không có'}\`\n` +
         `• *Trạng thái*: ${statusText}\n` +
         `• *File vừa sửa*: ${fileCount} file\n` +
-        (state?.lastPrompt ? `• *Prompt gần nhất*: _"${truncate(state.lastPrompt, 60)}"_` : ''),
+        (state?.lastPrompt ? `• *Prompt gần nhất*: _"${truncate(state.lastPrompt, 60)}"_\n` : '') +
+        `\n_Gõ /sessions nếu muốn đổi sang session khác._`,
       );
       return;
     }
@@ -395,11 +502,12 @@ export function apply(ctx, config = {}) {
           const handle = await ctx.agents.create({ meta: { cwd: process.cwd() } });
           const newSession = handle?.agent?.session;
           if (newSession) {
+            selectedSessionId = newSession.id;
             lastActiveSessionId = newSession.id;
             await tgSend(
               `✨ *Đã tạo session mới*: \`${newSession.id}\`\n` +
               `• *Workspace*: \`${getProjectName(newSession)}\`\n` +
-              `Bạn có thể gửi prompt trực tiếp từ đây.`,
+              `Session này đã được tự động chọn làm active. Bạn có thể gửi prompt trực tiếp từ đây.`,
             );
             return;
           }
@@ -460,7 +568,10 @@ export function apply(ctx, config = {}) {
         const handle = await ctx.agents.create({ meta: { cwd: process.cwd() } });
         agent = handle?.agent;
         session = agent?.session || null;
-        if (session) lastActiveSessionId = session.id;
+        if (session) {
+          selectedSessionId = session.id;
+          lastActiveSessionId = session.id;
+        }
       } catch (e) {
         console.warn('[dsh-sound-notifier] Auto-create agent failed:', e.message);
       }
@@ -484,9 +595,9 @@ export function apply(ctx, config = {}) {
 
     const project = getProjectName(session);
     if (isRunning) {
-      await tgSend(`⏳ *DSH [${project}]*: Agent đang bận. Đã xếp hàng prompt: _"${truncate(text, 60)}"_`);
+      await tgSend(`⏳ *DSH [${project}]* (\`${session.id}\`): Agent đang bận. Đã xếp hàng prompt: _"${truncate(text, 60)}"_`);
     } else {
-      await tgSend(`🚀 *DSH [${project}]*: Đã nhận yêu cầu: _"${truncate(text, 60)}"_\nAgent đang bắt đầu xử lý...`);
+      await tgSend(`🚀 *DSH [${project}]* (\`${session.id}\`): Đã nhận yêu cầu: _"${truncate(text, 60)}"_\nAgent đang bắt đầu xử lý...`);
     }
   }
 
@@ -496,6 +607,48 @@ export function apply(ctx, config = {}) {
     const data = cq.data || '';
     const chatId = cq.message.chat.id;
     const msgId = cq.message.message_id;
+
+    if (data.startsWith('switch:')) {
+      const targetId = data.replace('switch:', '');
+      const s = ctx.sessions?.get(targetId);
+      if (s) {
+        selectedSessionId = s.id;
+        const summary = getSessionSummary(s);
+        await tgEdit(
+          chatId,
+          msgId,
+          `✅ *Đã chuyển sang session:*\n• *Project*: \`${summary.project}\`\n• *ID*: \`${s.id}\`\nMọi prompt bạn gửi tiếp theo sẽ chạy trong session này.`,
+        );
+      } else {
+        await tgEdit(chatId, msgId, `❌ Session \`${targetId}\` không còn tồn tại.`);
+      }
+      return;
+    }
+
+    if (data === 'cmd:new') {
+      try {
+        if (typeof ctx.agents?.create === 'function') {
+          const handle = await ctx.agents.create({ meta: { cwd: process.cwd() } });
+          const newSession = handle?.agent?.session;
+          if (newSession) {
+            selectedSessionId = newSession.id;
+            lastActiveSessionId = newSession.id;
+            await tgEdit(
+              chatId,
+              msgId,
+              `✨ *Đã tạo session mới*: \`${newSession.id}\`\n` +
+              `• *Workspace*: \`${getProjectName(newSession)}\`\n` +
+              `Đã tự động chọn session này làm active. Bạn có thể gửi prompt trực tiếp từ đây.`,
+            );
+            return;
+          }
+        }
+        await tgEdit(chatId, msgId, '❌ Không thể khởi tạo session mới trên Host.');
+      } catch (e) {
+        await tgEdit(chatId, msgId, `❌ Lỗi tạo session: ${e.message}`);
+      }
+      return;
+    }
 
     if (data.startsWith('appr:')) {
       const [, action, reqId] = data.split(':');
@@ -938,12 +1091,16 @@ export function apply(ctx, config = {}) {
 
   // Clean up
   ctx.on('session/disposed', (session) => {
-    if (session?.id) sessionStates.delete(session.id);
+    if (session?.id) {
+      sessionStates.delete(session.id);
+      if (selectedSessionId === session.id) selectedSessionId = null;
+      if (lastActiveSessionId === session.id) lastActiveSessionId = null;
+    }
   });
 
   ctx.on('dispose', () => {
     abortController.abort();
   });
 
-  console.info('[dsh-sound-notifier] Active: Sounds + Desktop Notification + 2-way Telegram Bot + Live Progress.');
+  console.info('[dsh-sound-notifier] Active: Sounds + Desktop Notification + 2-way Telegram Bot + Session Switcher.');
 }
