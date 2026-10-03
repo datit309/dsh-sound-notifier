@@ -1,7 +1,7 @@
 {
   "name": "dsh-sound-notifier",
   "version": "1.0.0",
-  "description": "Sound and desktop notifications for DSH task completion, errors, and approvals",
+  "description": "Sound, desktop notification and 2-way Telegram bot for DeepSeek Harness (DSH)",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -12,5 +12,8 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "*"
   }
 }

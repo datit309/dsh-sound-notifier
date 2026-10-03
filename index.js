@@ -2,9 +2,19 @@ import { execFile } from 'node:child_process';
 import { basename, join } from 'node:path';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import z from '@deepseek-ai/schemastery';
 
 export const name = 'dsh-sound-notifier';
 export const inject = ['sessions', 'agents'];
+
+/** Cordis configuration schema exposed directly to the DSH Web Settings UI. */
+export const Config = z.object({
+  token: z.string().role('secret').description('Telegram Bot Token (lấy từ @BotFather)').volatile(),
+  chatId: z.string().description('Telegram Chat ID (tự động điền khi bạn gửi /start)').volatile(),
+  sound: z.boolean().default(true).description('Bật âm thanh hệ thống qua loa Mac').volatile(),
+  notification: z.boolean().default(true).description('Hiện thông báo banner trên màn hình macOS').volatile(),
+  volume: z.number().min(0).max(1).step(0.1).default(1).description('Âm lượng thông báo (0.0 đến 1.0)').volatile(),
+});
 
 // ponytail: Native OS audio, AppleScript notifications & Telegram 2-way Bot.
 const DEFAULT_SOUNDS = {
@@ -34,6 +44,14 @@ const POPULAR_MODELS = [
 ];
 
 let lastSoundAt = 0;
+
+function readVolatile(val, fallback = undefined) {
+  if (val === undefined || val === null) return fallback;
+  if (typeof val === 'object' && typeof val.get === 'function') {
+    return val.get() ?? fallback;
+  }
+  return val;
+}
 
 function playSound(type, volume = 1, customSounds = {}) {
   const now = Date.now();
@@ -165,9 +183,9 @@ function loadTelegramConfig(config = {}) {
     }
   } catch {}
 
-  const token = config.token || config.telegram?.token || process.env.TELEGRAM_BOT_TOKEN || fileConfig.token || '';
-  const chatId = config.chatId || config.telegram?.chatId || process.env.TELEGRAM_CHAT_ID || fileConfig.chatId || '';
-  return { token: String(token).trim(), chatId: String(chatId).trim(), configFilePath };
+  const rawToken = readVolatile(config.token) || config.telegram?.token || process.env.TELEGRAM_BOT_TOKEN || fileConfig.token || '';
+  const rawChatId = readVolatile(config.chatId) || config.telegram?.chatId || process.env.TELEGRAM_CHAT_ID || fileConfig.chatId || '';
+  return { token: String(rawToken).trim(), chatId: String(rawChatId).trim(), configFilePath };
 }
 
 function saveTelegramConfig(filePath, token, chatId) {
@@ -250,9 +268,10 @@ function runGitDiff(cwd) {
 }
 
 export function apply(ctx, config = {}) {
-  const soundEnabled = config.sound !== false;
-  const notifyEnabled = config.notification !== false;
-  const volume = typeof config.volume === 'number' ? config.volume : 1;
+  const soundEnabled = readVolatile(config.sound) !== false;
+  const notifyEnabled = readVolatile(config.notification) !== false;
+  const rawVol = readVolatile(config.volume);
+  const volume = typeof rawVol === 'number' ? rawVol : 1;
   const customSounds = config.sounds || {};
 
   // Per-session tracking
@@ -312,6 +331,11 @@ export function apply(ctx, config = {}) {
   let botToken = tgConfig.token;
   let botChatId = tgConfig.chatId;
   const botConfigPath = tgConfig.configFilePath;
+
+  // Sync back to telegram.json if provided from Web GUI
+  if (readVolatile(config.token)) {
+    saveTelegramConfig(botConfigPath, botToken, botChatId);
+  }
 
   const pendingApprovals = new Map(); // id -> resolve
   const pendingQuestions = new Map(); // callId -> { resolve, questions }
@@ -557,7 +581,7 @@ export function apply(ctx, config = {}) {
         if (isRunning) {
           await tgSend(`⏳ *DSH [${project}]*: Đã nhận ảnh (\`${fileName}\`). Agent đang bận, đã xếp hàng yêu cầu.`);
         } else {
-          await tgSend(`🚀 *DSH [${project}]*: Đã nhận ảnh (\`${fileName}\`).\nAgent đang phân tích và xử lý...`);
+          await tgSend(`🚀 *DSH [${project}]*: Đã nhận ảnh (\`${fileName}\`).\nAgent đang bắt đầu phân tích và xử lý...`);
         }
       } catch (err) {
         await tgSend(`❌ Lỗi tải ảnh: ${err.message}`);
