@@ -50,9 +50,12 @@ const BOT_COMMANDS = [
   { command: 'cd', description: 'Đổi thư mục: /cd <đường dẫn>' },
   { command: 'model', description: 'Xem & đổi Model AI' },
   { command: 'diff', description: 'Xem code vừa sửa (Git Diff)' },
+  { command: 'commit', description: 'Commit & push git: /commit <msg>' },
   { command: 'sh', description: 'Chạy lệnh shell: /sh <lệnh>' },
   { command: 'get', description: 'Tải file về máy: /get <file>' },
   { command: 'files', description: 'Danh sách file vừa sửa' },
+  { command: 'mute', description: 'Tắt âm thanh loa Mac' },
+  { command: 'unmute', description: 'Bật lại âm thanh loa Mac' },
   { command: 'new', description: 'Mở session làm việc mới' },
   { command: 'status', description: 'Xem trạng thái Agent & Session' },
   { command: 'stop', description: 'Dừng khẩn cấp lượt chạy' },
@@ -1007,6 +1010,65 @@ export function apply(ctx, config = {}) {
       return;
     }
 
+    // --- 3. Document upload (Code / Document to Agent) ---
+    if (msg.document) {
+      const doc = msg.document;
+      const fileName = doc.file_name || `document_${Date.now()}`;
+      const caption = (msg.caption || '').trim();
+      const session = getActiveSession();
+      const agent = await resolveLiveAgent(session);
+      const project = getProjectName(session);
+
+      if (!agent) {
+        await tgSend('⚠️ Không tìm thấy session hoặc agent đang mở trên máy Mac.');
+        return;
+      }
+
+      await tgSendChatAction('upload_document');
+      await tgSend(`📥 *Đang tải file \`${fileName}\` về máy Mac...*`);
+
+      try {
+        const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${doc.file_id}`);
+        const fileData = await fileRes.json();
+        if (!fileData.ok || !fileData.result?.file_path) {
+          throw new Error(fileData.description || 'Không lấy được thông tin file từ Telegram');
+        }
+
+        const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+        const docRes = await fetch(downloadUrl);
+        const docBuffer = Buffer.from(await docRes.arrayBuffer());
+
+        const home = process.env.DSH_HOME || join(process.env.HOME || '', '.dsh');
+        const uploadDir = join(home, 'telegram-uploads');
+        mkdirSync(uploadDir, { recursive: true });
+
+        const localFilePath = join(uploadDir, fileName);
+        writeFileSync(localFilePath, docBuffer);
+
+        const promptText = `[Người dùng gửi kèm file tài liệu: @${localFilePath}]\n${caption || 'Hãy đọc và xử lý nội dung file này theo yêu cầu.'}`;
+
+        const userMessage = {
+          id: randomUUID(),
+          role: 'user',
+          content: [{ type: 'text', text: promptText }],
+          source: { kind: 'user' },
+        };
+        Object.freeze(userMessage);
+
+        const isRunning = agent.status === 'running';
+        agent.followup(userMessage);
+
+        if (isRunning) {
+          await tgSend(`⏳ *DSH [${project}]*: Đã nhận file \`${fileName}\`. Agent đang bận, đã xếp hàng yêu cầu.`);
+        } else {
+          await tgSend(`🚀 *DSH [${project}]*: Đã nhận file \`${fileName}\`.\nAgent đang bắt đầu đọc và xử lý...`);
+        }
+      } catch (err) {
+        await tgSend(`❌ Lỗi tải file: ${err.message}`);
+      }
+      return;
+    }
+
     if (!text) return;
 
     if (text === '/start' || text === '/help') {
@@ -1022,13 +1084,17 @@ export function apply(ctx, config = {}) {
         `• /status - Xem chi tiết Session & Workspace hiện tại\n\n` +
         `*Công cụ kỹ thuật & Mã nguồn:*\n` +
         `• /diff - Xem chi tiết mã nguồn vừa sửa (Git Diff)\n` +
+        `• /commit <msg> - Commit & push git nhanh lên GitHub\n` +
         `• /sh <lệnh> - Chạy lệnh terminal trực tiếp (0 token)\n` +
         `• /get <file> - Tải file từ máy Mac về Telegram\n` +
-        `• /files - Xem danh sách file vừa sửa\n` +
+        `• /files - Xem danh sách file vừa sửa (kèm nút tải)\n` +
         `• /model - Xem & đổi Model AI (Gemini, Claude, GPT)\n` +
+        `• /mute - Tắt âm thanh loa Mac (chỉ rung Telegram)\n` +
+        `• /unmute - Bật lại âm thanh loa Mac\n` +
         `• /stop - Dừng khẩn cấp lượt chạy hiện tại\n\n` +
         `🎙 *Tin nhắn thoại*: Gửi Voice Message để bot chuyển thành prompt chữ.\n` +
         `📷 *Gửi ảnh*: Gửi ảnh chụp màn hình để Agent đọc và sửa code.\n` +
+        `📁 *Gửi file*: Gửi file .pdf, .txt, .sql, .js để Agent đọc và xử lý.\n` +
         `💬 *Gửi prompt*: Gõ tin nhắn bất kỳ để Agent thực thi.`,
       );
       return;
@@ -1242,10 +1308,59 @@ export function apply(ctx, config = {}) {
         `• *Session đang chọn*: \`${session?.id || 'Không có'}\`\n` +
         `• *Model*: \`${currentModel}\`\n` +
         `• *Trạng thái*: ${statusText}\n` +
+        `• *Loa Mac*: ${soundEnabled ? '🔊 Bật' : '🔇 Tắt'}\n` +
         `• *File vừa sửa*: ${fileCount} file\n` +
         (state?.lastPrompt ? `• *Prompt gần nhất*: _"${truncate(state.lastPrompt, 60)}"_\n` : '') +
-        `\n_Lệnh: /sessions, /workspaces, /model, /diff, /sh._`,
+        `\n_Lệnh: /sessions, /workspaces, /model, /diff, /commit, /sh, /mute._`,
       );
+      return;
+    }
+
+    if (text === '/mute') {
+      soundEnabled = false;
+      await tgSend('🔇 *Đã tắt âm thanh loa Mac.*\nCác thông báo hoàn thành/lỗi sẽ chỉ rung trên điện thoại qua Telegram.');
+      return;
+    }
+
+    if (text === '/unmute') {
+      soundEnabled = true;
+      await tgSend('🔊 *Đã bật lại âm thanh loa Mac.*');
+      return;
+    }
+
+    // --- Git Commit & Push (/commit) ---
+    if (text.startsWith('/commit')) {
+      const parts = text.split(/\s+/);
+      const commitMsg = parts.slice(1).join(' ').trim();
+      const session = getActiveSession();
+      const cwd = session?.header?.cwd || process.cwd();
+      const project = getProjectName(session);
+
+      if (!commitMsg) {
+        await tgSend('ℹ️ *Cách dùng*: `/commit <nội dung commit>`\nVí dụ: `/commit feat: hoàn thiện tính năng telegram`');
+        return;
+      }
+
+      await tgSendChatAction('typing');
+      execFile('git', ['add', '-A'], { cwd }, (errAdd) => {
+        if (errAdd) {
+          tgSend(`❌ Lỗi git add: ${errAdd.message}`);
+          return;
+        }
+        execFile('git', ['commit', '-m', commitMsg], { cwd }, (errCommit, commitOut) => {
+          if (errCommit) {
+            tgSend(`❌ Lỗi git commit: ${errCommit.message}\n${commitOut || ''}`);
+            return;
+          }
+          execFile('git', ['push'], { cwd }, (errPush, pushOut, pushErr) => {
+            if (errPush) {
+              tgSend(`⚠️ *Đã commit nhưng chưa push được*:\n${errPush.message}\n${pushErr || ''}`);
+              return;
+            }
+            tgSend(`🚀 *Git Commit & Push thành công [${project}]!*\n\`\`\`\n${(commitOut || '').trim()}\n\`\`\``);
+          });
+        });
+      });
       return;
     }
 
@@ -1289,8 +1404,14 @@ export function apply(ctx, config = {}) {
       const session = getActiveSession();
       const state = session ? getSessionState(session.id) : null;
       if (state && state.modifiedFiles.size > 0) {
-        const list = Array.from(state.modifiedFiles).map(f => `• \`${f}\`  (tải bằng: \`/get ${f}\`)`).join('\n');
-        await tgSend(`📁 *Các file đã sửa gần nhất:*\n${list}`);
+        const filesArr = Array.from(state.modifiedFiles);
+        const list = filesArr.map(f => `• \`${f}\``).join('\n');
+        const buttons = filesArr.map(f => [{ text: `📥 Tải ${f}`, callback_data: `get:${f}` }]);
+        await tgSend(`📁 *Các file đã sửa gần nhất:*\n${list}\n\n_Bấm nút bên dưới để tải trực tiếp về điện thoại:_`, {
+          reply_markup: {
+            inline_keyboard: buttons,
+          },
+        });
       } else {
         await tgSend('ℹ️ Chưa có file nào được sửa đổi trong lượt gần nhất.');
       }
@@ -1402,6 +1523,37 @@ export function apply(ctx, config = {}) {
         const out = (stdout || '').trim();
         await tgSend(`🚀 *Git Status:*\n\`\`\`\n${out || 'Working tree sạch.'}\n\`\`\``);
       });
+      return;
+    }
+
+    if (data.startsWith('get:')) {
+      const targetFile = data.replace('get:', '');
+      const session = getActiveSession();
+      const cwd = session?.header?.cwd || process.cwd();
+      const project = getProjectName(session);
+
+      const resolved = isAbsolute(targetFile) ? targetFile : join(cwd, targetFile);
+      if (!existsSync(resolved)) {
+        await tgSend(`❌ File không còn tồn tại: \`${targetFile}\``);
+        return;
+      }
+      await tgSendChatAction('upload_document');
+      const sent = await tgSendDocument(resolved, `📄 [${project}] ${basename(resolved)}`);
+      if (!sent?.ok) {
+        await tgSend(`❌ Lỗi gửi file: ${sent?.description || 'Không gửi được'}`);
+      }
+      return;
+    }
+
+    if (data === 'act:mute') {
+      soundEnabled = false;
+      await tgEdit(chatId, msgId, '🔇 *Đã tắt âm thanh loa Mac.*');
+      return;
+    }
+
+    if (data === 'act:unmute') {
+      soundEnabled = true;
+      await tgEdit(chatId, msgId, '🔊 *Đã bật lại âm thanh loa Mac.*');
       return;
     }
 
@@ -1860,6 +2012,9 @@ export function apply(ctx, config = {}) {
                 ],
                 [
                   { text: '🚀 Git Status', callback_data: 'act:gitstatus' },
+                  { text: soundEnabled ? '🔇 Tắt loa' : '🔊 Bật loa', callback_data: soundEnabled ? 'act:mute' : 'act:unmute' },
+                ],
+                [
                   { text: '🔄 Session mới', callback_data: 'cmd:new' },
                 ],
               ],
