@@ -2,36 +2,68 @@
 
 Plugin đa năng cho DeepSeek Harness (DSH):
 1. **Âm thanh hệ thống & Desktop Notifications** (macOS, Linux, Windows) khi agent hoàn thành công việc, gặp lỗi hoặc cần tương tác.
-2. **Telegram 2-way Bot**: Nhận thông báo kết quả chi tiết, điều khiển Agent bằng prompt từ xa, phê duyệt (`approval/asked`) và trả lời câu hỏi (`ask_user_question`) bằng nút bấm trên điện thoại.
+2. **Telegram 2-way Bot**: Tương tác 2 chiều hoàn chỉnh từ điện thoại:
+   - Gửi ảnh chụp màn hình trực tiếp để Agent đọc ảnh (Vision).
+   - Xem mã nguồn thay đổi thời gian thực (`/diff`).
+   - Đổi Model AI ngay trên điện thoại (`/model`).
+   - Nhận Live Progress Card cập nhật tiến trình từng bước.
+   - Chọn và chuyển đổi Session chat (`/sessions`, `/switch`).
+   - Phê duyệt (`approval/asked`) và trả lời câu hỏi (`ask_user_question`) bằng nút bấm inline.
 
 ---
 
-## Tính năng
+## Tính năng chi tiết
 
-### 1. Thông báo âm thanh & Desktop (Native OS)
-- **Hoàn thành**: Phát chuông `Hero.aiff` + banner thông báo kèm thời gian xử lý và file đã sửa.
-- **Báo lỗi / hết token**: Âm thanh `Basso.aiff` + nội dung lỗi chi tiết.
-- **Cần phê duyệt / câu hỏi**: Âm thanh `Ping.aiff` + nhắc người dùng thao tác.
+### 1. Gửi ảnh từ điện thoại (Vision / Screenshot)
+- Gửi ảnh trực tiếp từ app Telegram trên điện thoại kèm chú thích (caption).
+- Bot tự động tải ảnh độ phân giải cao nhất về `~/.dsh/telegram-uploads/` và đính kèm vào prompt của Agent.
+- Agent tự động dùng `read_image` hoặc multimodal vision để phân tích lỗi UI/terminal và fix code ngay.
 
-### 2. Telegram 2-way Bot (Tương tác 2 chiều từ điện thoại)
-- **Tự động gửi kết quả**: Khi agent làm xong, bot gửi trực tiếp câu trả lời của AI kèm danh sách file đã thay đổi về Telegram.
-- **Gửi prompt từ xa**: Gõ bất kỳ tin nhắn nào trong chat Telegram, Agent trên máy Mac sẽ nhận lệnh và thực thi.
-- **Nút bấm phê duyệt trực tiếp**: Khi Agent gọi tool cần cấp quyền, bot gửi tin nhắn kèm 2 nút `[ ✅ Cho phép ]` và `[ ❌ Từ chối ]`. Bấm trực tiếp trên điện thoại để agent chạy tiếp.
-- **Nút bấm trả lời câu hỏi**: Khi Agent hỏi (`ask_user_question`), bot hiển thị các lựa chọn bằng nút bấm inline.
-- **Lệnh điều khiển**:
-  - `/status`: Xem trạng thái Agent (running/idle), Session ID, Workspace đang mở.
-  - `/stop`: Dừng khẩn cấp lượt chạy hiện tại (`agent.cancel()`).
-  - `/files`: Xem danh sách file vừa chỉnh sửa gần nhất.
-  - `/help`: Xem hướng dẫn sử dụng.
-- **Bảo mật**: Tự động khóa theo `chat_id`, chỉ duy nhất tài khoản Telegram của bạn mới có quyền tương tác.
+### 2. Xem code thay đổi (`/diff`)
+- Gõ `/diff` trên Telegram.
+- Bot chạy `git status` và `git diff` trong workspace đang chọn, trả về:
+  - Danh sách file thay đổi (staged / unstaged).
+  - Thống kê diffstat (`+12 -3`).
+  - Đoạn code diff highlight màu cú pháp rõ ràng.
+
+### 3. Đổi Model AI từ xa (`/model`)
+- Gõ `/model` để mở danh sách các model mạnh nhất:
+  - ⚡ Gemini 3.8 Flash (High)
+  - ⚡ Gemini 3.7 Flash (High)
+  - 🧠 Claude 4.6 Sonnet
+  - 🧠 Claude 4.6 Opus Thinking
+  - 🚀 GPT-6 Astra
+  - 🚀 GPT-5.6 Sol
+  - 🌐 Qwen 3.7 Max
+  - 🔄 Auto Router
+- Bấm nút tương ứng trên điện thoại để áp dụng model ngay cho session hiện tại.
+
+### 4. Quản lý Session (`/sessions`, `/switch`)
+- `/sessions`: Xem danh sách tất cả các session đang mở kèm nút bấm chuyển đổi.
+- `/switch <số>`: Đổi sang session cụ thể (ví dụ `/switch 1`).
+- `/new`: Mở phiên làm việc (Session) mới từ xa.
+
+### 5. Live Progress Card & Typing Indicator
+- Khi Agent bắt đầu xử lý, bot gửi 1 tin nhắn tiến trình duy nhất và cập nhật liên tục:
+  ```text
+  ⚡ DSH [Freelancer] đang xử lý... (18s)
+  📝 "Tích hợp tính năng 1, 2, 3"
+
+  ⏳ Tiến trình (4 steps):
+  ✓ Đọc `package.json`
+  ✓ Chạy `git diff`
+  ▶ Đang sửa `index.js`...
+  ```
+- Không gây spam thông báo, màn hình chat luôn gọn gàng.
+
+### 6. Phê duyệt & Trả lời câu hỏi
+- Tự động hiển thị nút bấm Inline `[ ✅ Cho phép ]` và `[ ❌ Từ chối ]` khi Agent gọi tool cần quyền.
+- Hiển thị danh sách lựa chọn khi Agent gọi `ask_user_question`.
 
 ---
 
 ## Cấu hình
 
-Bạn có thể cấu hình Telegram qua 1 trong 3 cách:
-
-### Cách 1: File `~/.dsh/telegram.json` (Khuyên dùng)
 Tạo file `~/.dsh/telegram.json`:
 ```json
 {
@@ -41,51 +73,23 @@ Tạo file `~/.dsh/telegram.json`:
 ```
 > **Mẹo tự động nhận `chatId`**: Nếu để trống `chatId`, bạn chỉ cần gửi tin nhắn `/start` tới bot từ điện thoại, bot sẽ tự lưu `chatId` của bạn và khóa quyền cho tài khoản đó.
 
-### Cách 2: `cordis.patch.yml` của DSH
-Trong `~/.dsh/profiles/web/cordis.patch.yml`:
-```yaml
-- id: dsh-sound-notifier
-  name: "dsh-sound-notifier"
-  config:
-    sound: true
-    notification: true
-    volume: 1
-    telegram:
-      token: "YOUR_TELEGRAM_BOT_TOKEN"
-      chatId: "YOUR_TELEGRAM_CHAT_ID"
-```
-
-### Cách 3: Biến môi trường
-```bash
-export TELEGRAM_BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
-export TELEGRAM_CHAT_ID="YOUR_TELEGRAM_CHAT_ID"
-```
-
 ---
 
-## Cài đặt vào DSH Profile
+## Bảng lệnh Telegram
 
-1. Khai báo vào `~/.dsh/profiles/web/package.json`:
-```json
-{
-  "dependencies": {
-    "dsh-sound-notifier": "file:/Users/trantandat/GIC/Freelancer/dsh-sound-notifier"
-  },
-  "dsh": {
-    "profile": {
-      "bundles": [
-        "dsh-sound-notifier"
-      ]
-    }
-  }
-}
-```
-
-2. Kích hoạt trong `~/.dsh/profiles/web/cordis.patch.yml`:
-```yaml
-- id: dsh-sound-notifier
-  name: "dsh-sound-notifier"
-```
+| Lệnh | Chức năng |
+|:--- |:--- |
+| **Gõ tin nhắn bất kỳ** | Gửi prompt cho Agent lập trình |
+| **Gửi ảnh kèm caption** | Đưa ảnh chụp màn hình cho Agent đọc và fix bug |
+| `/diff` | Xem git diff mã nguồn vừa sửa đổi |
+| `/model` | Mở menu đổi Model AI bằng nút bấm |
+| `/sessions` | Xem danh sách & chọn Session chat |
+| `/switch <số>` | Đổi nhanh sang session tương ứng |
+| `/new` | Tạo session mới từ xa |
+| `/status` | Xem trạng thái Agent, Session, Workspace |
+| `/stop` | Dừng khẩn cấp lượt chạy |
+| `/files` | Xem danh sách file vừa sửa |
+| `/help` | Xem hướng dẫn sử dụng |
 
 ---
 

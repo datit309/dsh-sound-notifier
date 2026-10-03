@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { basename, join } from 'node:path';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
 export const name = 'dsh-sound-notifier';
@@ -21,6 +21,17 @@ const DEFAULT_SOUNDS = {
     prompt: '/usr/share/sounds/freedesktop/stereo/message.oga',
   },
 };
+
+const POPULAR_MODELS = [
+  { id: 'ag/gemini-3.8-flash-high', label: '⚡ Gemini 3.8 Flash (High)' },
+  { id: 'ag/gemini-3.7-flash-high', label: '⚡ Gemini 3.7 Flash (High)' },
+  { id: 'ag/claude-sonnet-4-6', label: '🧠 Claude 4.6 Sonnet' },
+  { id: 'ag/claude-opus-4-6-thinking', label: '🧠 Claude 4.6 Opus Thinking' },
+  { id: 'cx/gpt-6-astra', label: '🚀 GPT-6 Astra' },
+  { id: 'cx/gpt-5.6-sol', label: '🚀 GPT-5.6 Sol' },
+  { id: 'qwen-web/qwen3.7-max', label: '🌐 Qwen 3.7 Max' },
+  { id: 'auto', label: '🔄 Auto Router' },
+];
 
 let lastSoundAt = 0;
 
@@ -95,6 +106,10 @@ function summarizeToolCall(name, args) {
   if (name === 'read' || name === 'view') {
     const f = basename(args.file_path || args.path || '');
     return f ? `Đọc \`${f}\`` : 'Đọc file';
+  }
+  if (name === 'read_image') {
+    const f = basename(args.file_path || args.path || '');
+    return f ? `Xem ảnh \`${f}\`` : 'Đọc ảnh';
   }
   if (name === 'edit' || name === 'str_replace_editor') {
     const f = basename(args.file_path || args.path || '');
@@ -183,6 +198,55 @@ function getSessionSummary(session) {
     project,
     prompt: firstPrompt ? truncate(firstPrompt, 40) : '',
   };
+}
+
+function getSessionCurrentModel(session) {
+  if (!session) return 'ag/gemini-3.8-flash-high';
+  try {
+    const events = session.snapshotEvents();
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i]?.type === 'model/selection' && events[i].data?.model) {
+        return events[i].data.model;
+      }
+    }
+  } catch {}
+  return 'ag/gemini-3.8-flash-high';
+}
+
+function runGitDiff(cwd) {
+  return new Promise((resolve) => {
+    execFile('git', ['status', '--short'], { cwd }, (errStatus, statusOut) => {
+      if (errStatus) {
+        return resolve({ ok: false, error: 'Thư mục hiện tại không phải Git repository.' });
+      }
+      const trimmedStatus = (statusOut || '').trim();
+      if (!trimmedStatus) {
+        execFile('git', ['diff', 'HEAD~1', '--stat'], { cwd }, (errHead, headStat) => {
+          if (!errHead && headStat && headStat.trim()) {
+            return resolve({
+              ok: true,
+              clean: true,
+              lastCommit: headStat.trim(),
+            });
+          }
+          return resolve({ ok: true, clean: true });
+        });
+        return;
+      }
+
+      execFile('git', ['diff', '-U2'], { cwd }, (errDiff, diffOut) => {
+        execFile('git', ['diff', '--stat'], { cwd }, (errStat, statOut) => {
+          resolve({
+            ok: true,
+            clean: false,
+            status: trimmedStatus,
+            stat: (statOut || '').trim(),
+            diff: (diffOut || '').trim(),
+          });
+        });
+      });
+    });
+  });
 }
 
 export function apply(ctx, config = {}) {
@@ -389,6 +453,31 @@ export function apply(ctx, config = {}) {
     });
   }
 
+  async function showModelSelectionMenu() {
+    const session = getActiveSession();
+    const currentModel = getSessionCurrentModel(session);
+    const project = getProjectName(session);
+
+    const buttons = POPULAR_MODELS.map((m, idx) => {
+      const isCurrent = m.id === currentModel;
+      return [{
+        text: `${isCurrent ? '🟢 ' : ''}${m.label}${isCurrent ? ' (Active)' : ''}`,
+        callback_data: `model:${idx}`,
+      }];
+    });
+
+    await tgSend(
+      `🧠 *Chọn Model cho Session [${project}]*\n` +
+      `• Model đang dùng: \`${currentModel}\`\n\n` +
+      `_Bấm nút bên dưới để đổi model:_`,
+      {
+        reply_markup: {
+          inline_keyboard: buttons,
+        },
+      },
+    );
+  }
+
   // Handle incoming Telegram commands / messages
   async function handleTelegramMessage(msg) {
     const fromId = String(msg.chat.id);
@@ -418,6 +507,64 @@ export function apply(ctx, config = {}) {
       return;
     }
 
+    // --- 1. Photo upload (Vision / Screenshot) ---
+    if (msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0) {
+      const photo = msg.photo[msg.photo.length - 1];
+      const caption = (msg.caption || '').trim();
+      const session = getActiveSession();
+      const agent = await resolveLiveAgent(session);
+      const project = getProjectName(session);
+
+      if (!agent) {
+        await tgSend('⚠️ Không tìm thấy session hoặc agent đang mở trên máy Mac.');
+        return;
+      }
+
+      await tgSend('📥 *Đang tải ảnh từ Telegram...*');
+
+      try {
+        const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${photo.file_id}`);
+        const fileData = await fileRes.json();
+        if (!fileData.ok || !fileData.result?.file_path) {
+          throw new Error(fileData.description || 'Không lấy được thông tin file từ Telegram');
+        }
+
+        const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+        const imgRes = await fetch(downloadUrl);
+        const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+
+        const home = process.env.DSH_HOME || join(process.env.HOME || '', '.dsh');
+        const uploadDir = join(home, 'telegram-uploads');
+        mkdirSync(uploadDir, { recursive: true });
+
+        const fileName = `photo_${Date.now()}_${randomUUID().slice(0, 6)}.jpg`;
+        const localFilePath = join(uploadDir, fileName);
+        writeFileSync(localFilePath, imgBuffer);
+
+        const promptText = `[Người dùng gửi kèm ảnh chụp màn hình: @${localFilePath}]\n${caption || 'Hãy xem và phân tích hình ảnh này để xử lý theo ngữ cảnh.'}`;
+
+        const userMessage = {
+          id: randomUUID(),
+          role: 'user',
+          content: [{ type: 'text', text: promptText }],
+          source: { kind: 'user' },
+        };
+        Object.freeze(userMessage);
+
+        const isRunning = agent.status === 'running';
+        agent.followup(userMessage);
+
+        if (isRunning) {
+          await tgSend(`⏳ *DSH [${project}]*: Đã nhận ảnh (\`${fileName}\`). Agent đang bận, đã xếp hàng yêu cầu.`);
+        } else {
+          await tgSend(`🚀 *DSH [${project}]*: Đã nhận ảnh (\`${fileName}\`).\nAgent đang phân tích và xử lý...`);
+        }
+      } catch (err) {
+        await tgSend(`❌ Lỗi tải ảnh: ${err.message}`);
+      }
+      return;
+    }
+
     if (!text) return;
 
     if (text === '/start' || text === '/help') {
@@ -427,14 +574,65 @@ export function apply(ctx, config = {}) {
         `*Lệnh điều khiển:*\n` +
         `• /sessions - Xem danh sách & chọn Session chat\n` +
         `• /switch <số> - Đổi sang Session khác\n` +
+        `• /model - Xem & đổi Model AI (Gemini, Claude, GPT)\n` +
+        `• /diff - Xem chi tiết mã nguồn vừa sửa (Git Diff)\n` +
         `• /new - Mở một phiên làm việc mới\n` +
         `• /status - Xem chi tiết Session đang chọn\n` +
         `• /stop - Dừng khẩn cấp lượt chạy hiện tại\n` +
         `• /files - Xem danh sách file vừa được sửa\n` +
         `• /help - Xem hướng dẫn sử dụng\n\n` +
-        `💬 *Gửi prompt từ xa:*\n` +
-        `Gõ bất kỳ tin nhắn nào vào đây, Agent trong Session đang chọn sẽ thực thi ngay.`,
+        `📷 *Gửi ảnh:* Gửi ảnh chụp màn hình trực tiếp để Agent đọc ảnh và fix bug.\n\n` +
+        `💬 *Gửi prompt từ xa:* Gõ bất kỳ tin nhắn nào, Agent trong Session đang chọn sẽ thực thi ngay.`,
       );
+      return;
+    }
+
+    // --- 2. Model selection (/model) ---
+    if (text === '/model' || text === '/models') {
+      await showModelSelectionMenu();
+      return;
+    }
+
+    // --- 3. Git Diff (/diff) ---
+    if (text === '/diff') {
+      const session = getActiveSession();
+      const cwd = session?.header?.cwd || process.cwd();
+      const project = getProjectName(session);
+
+      await tgSendChatAction('typing');
+      const diffResult = await runGitDiff(cwd);
+
+      if (!diffResult.ok) {
+        await tgSend(`❌ *Git Diff [${project}]*: ${diffResult.error}`);
+        return;
+      }
+
+      if (diffResult.clean) {
+        if (diffResult.lastCommit) {
+          await tgSend(
+            `ℹ️ *Git [${project}]*: Working tree đang sạch.\n\n` +
+            `*Thay đổi ở commit gần nhất:*\n\`\`\`\n${diffResult.lastCommit}\n\`\`\``,
+          );
+        } else {
+          await tgSend(`ℹ️ *Git [${project}]*: Working tree đang sạch, không có thay đổi nào chưa commit.`);
+        }
+        return;
+      }
+
+      let diffMsg = `📄 *Git Diff [${project}]:*\n\n*Trạng thái:*\n\`\`\`\n${diffResult.status}\n\`\`\`\n`;
+      if (diffResult.stat) {
+        diffMsg += `*Thống kê:*\n\`\`\`\n${diffResult.stat}\n\`\`\`\n`;
+      }
+
+      if (diffResult.diff) {
+        const truncatedDiff = truncate(diffResult.diff, 2800);
+        diffMsg += `*Diff chi tiết:*\n\`\`\`diff\n${truncatedDiff}\n\`\`\``;
+        if (diffResult.diff.length > 2800) {
+          diffMsg += '\n_(Đoạn diff dài, đã rút gọn)_';
+        }
+      }
+
+      await tgSend(diffMsg);
       return;
     }
 
@@ -483,15 +681,17 @@ export function apply(ctx, config = {}) {
       const state = session ? getSessionState(session.id) : null;
       const statusText = agent ? (agent.status === 'running' ? '⚡ Đang chạy (running)' : '💤 Đang rảnh (idle)') : 'Chưa có Agent';
       const fileCount = state?.modifiedFiles?.size || 0;
+      const currentModel = getSessionCurrentModel(session);
 
       await tgSend(
         `📊 *Trạng thái DeepSeek Harness*\n\n` +
         `• *Project*: \`${project}\`\n` +
         `• *Session đang chọn*: \`${session?.id || 'Không có'}\`\n` +
+        `• *Model*: \`${currentModel}\`\n` +
         `• *Trạng thái*: ${statusText}\n` +
         `• *File vừa sửa*: ${fileCount} file\n` +
         (state?.lastPrompt ? `• *Prompt gần nhất*: _"${truncate(state.lastPrompt, 60)}"_\n` : '') +
-        `\n_Gõ /sessions nếu muốn đổi sang session khác._`,
+        `\n_Lệnh: /sessions (đổi session), /model (đổi model), /diff (xem code sửa)._`,
       );
       return;
     }
@@ -607,6 +807,28 @@ export function apply(ctx, config = {}) {
     const data = cq.data || '';
     const chatId = cq.message.chat.id;
     const msgId = cq.message.message_id;
+
+    if (data.startsWith('model:')) {
+      const idx = Number.parseInt(data.replace('model:', ''), 10);
+      const chosen = POPULAR_MODELS[idx];
+      const session = getActiveSession();
+      if (!session || !chosen) {
+        await tgEdit(chatId, msgId, '❌ Không thể đổi model lúc này.');
+        return;
+      }
+      try {
+        session.append('model/selection', { provider: 'bee-router', model: chosen.id });
+        const project = getProjectName(session);
+        await tgEdit(
+          chatId,
+          msgId,
+          `✅ *Đã đổi Model cho Session [${project}]:*\n• *Model mới*: \`${chosen.id}\` (${chosen.label})\nCác prompt tiếp theo sẽ chạy trên model này.`,
+        );
+      } catch (e) {
+        await tgEdit(chatId, msgId, `❌ Lỗi khi đổi model: ${e.message}`);
+      }
+      return;
+    }
 
     if (data.startsWith('switch:')) {
       const targetId = data.replace('switch:', '');
@@ -1102,5 +1324,5 @@ export function apply(ctx, config = {}) {
     abortController.abort();
   });
 
-  console.info('[dsh-sound-notifier] Active: Sounds + Desktop Notification + 2-way Telegram Bot + Session Switcher.');
+  console.info('[dsh-sound-notifier] Active: Sounds + Desktop Notification + 2-way Telegram Bot + Vision + Diff + Model Switcher.');
 }
