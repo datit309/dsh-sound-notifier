@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { basename, join } from 'node:path';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { basename, isAbsolute, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import z from '@deepseek-ai/schemastery';
 
@@ -45,13 +45,17 @@ const POPULAR_MODELS = [
 
 const BOT_COMMANDS = [
   { command: 'sessions', description: 'Danh sách & chọn session chat' },
-  { command: 'switch', description: 'Đổi sang session: /switch <số>' },
-  { command: 'model', description: 'Xem & đổi Model AI (Gemini, Claude, GPT)' },
-  { command: 'diff', description: 'Xem chi tiết code vừa sửa (Git Diff)' },
-  { command: 'new', description: 'Mở phiên làm việc mới' },
+  { command: 'switch', description: 'Đổi session: /switch <số>' },
+  { command: 'workspaces', description: 'Danh sách thư mục Workspace' },
+  { command: 'cd', description: 'Đổi thư mục: /cd <đường dẫn>' },
+  { command: 'model', description: 'Xem & đổi Model AI' },
+  { command: 'diff', description: 'Xem code vừa sửa (Git Diff)' },
+  { command: 'sh', description: 'Chạy lệnh shell: /sh <lệnh>' },
+  { command: 'get', description: 'Tải file về máy: /get <file>' },
+  { command: 'files', description: 'Danh sách file vừa sửa' },
+  { command: 'new', description: 'Mở session làm việc mới' },
   { command: 'status', description: 'Xem trạng thái Agent & Session' },
-  { command: 'stop', description: 'Dừng khẩn cấp lượt chạy hiện tại' },
-  { command: 'files', description: 'Xem danh sách file vừa sửa' },
+  { command: 'stop', description: 'Dừng khẩn cấp lượt chạy' },
   { command: 'help', description: 'Xem hướng dẫn sử dụng' },
 ];
 
@@ -121,11 +125,31 @@ function formatDuration(ms) {
   return `${min}m ${rem}s`;
 }
 
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function getProjectName(session) {
   const cwd = session?.header?.cwd;
   if (!cwd) return 'DSH';
   const parts = cwd.replace(/\\/g, '/').split('/').filter(Boolean);
   return parts.pop() || 'DSH';
+}
+
+function getBeeRouterApiKey() {
+  if (process.env.BEE_ROUTER_API_KEY) return process.env.BEE_ROUTER_API_KEY;
+  const home = process.env.DSH_HOME || join(process.env.HOME || '', '.dsh');
+  const yamlPath = join(home, '.credentials.yaml');
+  try {
+    if (existsSync(yamlPath)) {
+      const content = readFileSync(yamlPath, 'utf8');
+      const match = content.match(/BEE_ROUTER_API_KEY:\s*([^\s\n]+)/);
+      if (match) return match[1];
+    }
+  } catch {}
+  return '';
 }
 
 function extractToolFilePath(name, args) {
@@ -168,6 +192,9 @@ function summarizeToolCall(name, args) {
     const p = truncate(args.pattern || '', 25);
     return p ? `Tìm \`${p}\`` : 'Tìm kiếm file';
   }
+  if (name === 'present') {
+    return 'Bàn giao file kết quả';
+  }
   if (typeof name === 'string' && name.startsWith('mcp__serena__')) {
     const sub = name.replace('mcp__serena__', '');
     return `Serena: ${sub}`;
@@ -199,7 +226,7 @@ function splitMessage(text, maxLen = 3800) {
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
-    req.on('data', chunk => { raw += chunk; });
+    req.on('data', (chunk) => { raw += chunk; });
     req.on('end', () => {
       try {
         resolve(raw ? JSON.parse(raw) : {});
@@ -277,6 +304,46 @@ function getSessionCurrentModel(session) {
   return 'ag/gemini-3.8-flash-high';
 }
 
+function listAvailableWorkspaces(ctx) {
+  const set = new Map();
+  try {
+    const regList = ctx.workspaceRegistry?.list?.() || [];
+    for (const ws of regList) {
+      if (ws.path && existsSync(ws.path)) {
+        set.set(ws.path, { title: ws.title || basename(ws.path), path: ws.path });
+      }
+    }
+  } catch {}
+
+  try {
+    const sessions = ctx.sessions?.list?.() || [];
+    for (const s of sessions) {
+      const c = s.header?.cwd;
+      if (c && existsSync(c) && !set.has(c)) {
+        set.set(c, { title: basename(c), path: c });
+      }
+    }
+  } catch {}
+
+  const baseDirs = ['/Users/trantandat/GIC/Freelancer', process.cwd()];
+  for (const b of baseDirs) {
+    if (existsSync(b)) {
+      if (!set.has(b)) set.set(b, { title: basename(b), path: b });
+      try {
+        const subs = readdirSync(b, { withFileTypes: true });
+        for (const sub of subs) {
+          if (sub.isDirectory() && !sub.name.startsWith('.')) {
+            const p = join(b, sub.name);
+            if (!set.has(p)) set.set(p, { title: sub.name, path: p });
+          }
+        }
+      } catch {}
+    }
+  }
+
+  return Array.from(set.values()).slice(0, 10);
+}
+
 function runGitDiff(cwd) {
   return new Promise((resolve) => {
     execFile('git', ['status', '--short'], { cwd }, (errStatus, statusOut) => {
@@ -314,10 +381,9 @@ function runGitDiff(cwd) {
 }
 
 export function apply(ctx, config = {}) {
-  const soundEnabled = readVolatile(config.sound) !== false;
-  const notifyEnabled = readVolatile(config.notification) !== false;
-  const rawVol = readVolatile(config.volume);
-  const volume = typeof rawVol === 'number' ? rawVol : 1;
+  let soundEnabled = readVolatile(config.sound) !== false;
+  let notifyEnabled = readVolatile(config.notification) !== false;
+  let volume = typeof readVolatile(config.volume) === 'number' ? readVolatile(config.volume) : 1;
   const customSounds = config.sounds || {};
 
   // Per-session tracking
@@ -498,8 +564,8 @@ export function apply(ctx, config = {}) {
     });
   }
 
-  const pendingApprovals = new Map(); // id -> resolve
-  const pendingQuestions = new Map(); // callId -> { resolve, questions }
+  const pendingApprovals = new Map();
+  const pendingQuestions = new Map();
 
   const abortController = new AbortController();
   const signal = abortController.signal;
@@ -551,6 +617,31 @@ export function apply(ctx, config = {}) {
     } catch {}
   }
 
+  async function tgSendDocument(filePath, caption = '') {
+    if (!botToken || !botChatId || !filePath) return null;
+    try {
+      if (!existsSync(filePath)) return null;
+      const stats = statSync(filePath);
+      if (!stats.isFile() || stats.size > 50 * 1024 * 1024) return null;
+
+      const fileBuffer = readFileSync(filePath);
+      const form = new FormData();
+      form.append('chat_id', botChatId);
+      if (caption) form.append('caption', caption);
+      const blob = new Blob([fileBuffer]);
+      form.append('document', blob, basename(filePath));
+
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
+        method: 'POST',
+        body: form,
+      });
+      return await res.json();
+    } catch (err) {
+      console.warn('[dsh-sound-notifier] sendDocument error:', err.message);
+      return null;
+    }
+  }
+
   async function tgEdit(chatId, messageId, text, options = {}) {
     if (!botToken || !messageId) return null;
     try {
@@ -599,6 +690,73 @@ export function apply(ctx, config = {}) {
     } catch {}
   }
 
+  async function transcribeVoice(fileId) {
+    const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
+    const fileData = await fileRes.json();
+    if (!fileData.ok || !fileData.result?.file_path) {
+      throw new Error(fileData.description || 'Không lấy được file_path từ Telegram');
+    }
+
+    const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+    const audioRes = await fetch(downloadUrl);
+    const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
+
+    const tmpId = Date.now();
+    const ogaPath = `/tmp/tg_voice_${tmpId}.oga`;
+    const wavPath = `/tmp/tg_voice_${tmpId}.wav`;
+    writeFileSync(ogaPath, audioBuffer);
+
+    const ffmpegBin = existsSync('/opt/homebrew/bin/ffmpeg') ? '/opt/homebrew/bin/ffmpeg' : 'ffmpeg';
+    await new Promise((resolve, reject) => {
+      execFile(ffmpegBin, ['-y', '-i', ogaPath, '-ar', '16000', '-ac', '1', wavPath], (err) => {
+        if (err) reject(new Error(`Chuyển đổi audio bằng ffmpeg thất bại: ${err.message}`));
+        else resolve();
+      });
+    });
+
+    const wavBuffer = readFileSync(wavPath);
+    const base64Audio = wavBuffer.toString('base64');
+
+    try {
+      if (existsSync(ogaPath)) unlinkSync(ogaPath);
+      if (existsSync(wavPath)) unlinkSync(wavPath);
+    } catch {}
+
+    const apiKey = getBeeRouterApiKey();
+    const routerRes = await fetch('http://localhost:20128/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'ag/gemini-3.8-flash-high',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'input_audio', input_audio: { data: base64Audio, format: 'wav' } },
+            { type: 'text', text: 'Transcribe this voice audio message verbatim in its original language. Output ONLY the transcription text, with no preamble, quotes, or markdown.' },
+          ],
+        }],
+      }),
+    });
+
+    const respText = await routerRes.text();
+    let transcript = '';
+    for (const line of respText.split('\n')) {
+      if (line.startsWith('data: ') && !line.includes('[DONE]')) {
+        try {
+          const d = JSON.parse(line.slice(6));
+          transcript += d.choices?.[0]?.delta?.content || '';
+        } catch {}
+      }
+    }
+
+    const result = transcript.trim();
+    if (!result) throw new Error('Không nhận diện được giọng nói trong bản ghi âm.');
+    return result;
+  }
+
   async function showSessionsListMenu() {
     const sessions = ctx.sessions?.list?.() || [];
     if (sessions.length === 0) {
@@ -636,6 +794,64 @@ export function apply(ctx, config = {}) {
         inline_keyboard: buttons,
       },
     });
+  }
+
+  async function showWorkspacesMenu() {
+    const workspaces = listAvailableWorkspaces(ctx);
+    const currentCwd = getActiveSession()?.header?.cwd || process.cwd();
+
+    const buttons = workspaces.map((ws, idx) => {
+      const isCurrent = ws.path === currentCwd;
+      return [{
+        text: `${isCurrent ? '🟢 ' : '📂 '}${ws.title}${isCurrent ? ' (Active)' : ''}`,
+        callback_data: `cd:${idx}`,
+      }];
+    });
+
+    const lines = [
+      '📂 *Danh sách Thư mục Workspace:*\n',
+      `• *Hiện tại*: \`${currentCwd}\`\n`,
+      '_Bấm nút bên dưới để đổi Workspace, hoặc gõ:_ `/cd <đường dẫn>`',
+    ];
+
+    await tgSend(lines.join('\n'), {
+      reply_markup: {
+        inline_keyboard: buttons,
+      },
+    });
+  }
+
+  async function changeWorkspace(targetPath) {
+    if (!targetPath || !existsSync(targetPath)) {
+      await tgSend(`❌ Thư mục không tồn tại: \`${targetPath}\``);
+      return;
+    }
+    const stat = statSync(targetPath);
+    if (!stat.isDirectory()) {
+      await tgSend(`❌ Đường dẫn không phải thư mục: \`${targetPath}\``);
+      return;
+    }
+
+    try {
+      if (typeof ctx.agents?.create === 'function') {
+        const handle = await ctx.agents.create({ meta: { cwd: targetPath } });
+        const newSession = handle?.agent?.session;
+        if (newSession) {
+          selectedSessionId = newSession.id;
+          lastActiveSessionId = newSession.id;
+          await tgSend(
+            `📂 *Đã đổi Workspace thành công!*\n` +
+            `• *Thư mục*: \`${targetPath}\`\n` +
+            `• *Session mới*: \`${newSession.id}\`\n` +
+            `Mọi câu lệnh và prompt tiếp theo sẽ chạy trong thư mục này.`,
+          );
+          return;
+        }
+      }
+      await tgSend('❌ Không thể khởi tạo session trong thư mục mới.');
+    } catch (e) {
+      await tgSend(`❌ Lỗi đổi workspace: ${e.message}`);
+    }
   }
 
   async function showModelSelectionMenu() {
@@ -692,7 +908,48 @@ export function apply(ctx, config = {}) {
       return;
     }
 
-    // --- 1. Photo upload (Vision / Screenshot) ---
+    // --- 1. Voice Message (Voice to Text Prompt) ---
+    const voiceFileId = msg.voice?.file_id || msg.audio?.file_id;
+    if (voiceFileId) {
+      const session = getActiveSession();
+      const agent = await resolveLiveAgent(session);
+      const project = getProjectName(session);
+
+      if (!agent) {
+        await tgSend('⚠️ Không tìm thấy session hoặc agent đang mở trên máy Mac.');
+        return;
+      }
+
+      await tgSendChatAction('record_voice');
+      await tgSend('🎙 *Đang chuyển đổi giọng nói thành văn bản...*');
+
+      try {
+        const transcript = await transcribeVoice(voiceFileId);
+        await tgSend(`🎤 *Nhận diện giọng nói*: _"${transcript}"_`);
+
+        const userMessage = {
+          id: randomUUID(),
+          role: 'user',
+          content: [{ type: 'text', text: transcript }],
+          source: { kind: 'user' },
+        };
+        Object.freeze(userMessage);
+
+        const isRunning = agent.status === 'running';
+        agent.followup(userMessage);
+
+        if (isRunning) {
+          await tgSend(`⏳ *DSH [${project}]*: Agent đang bận. Đã xếp hàng prompt: _"${truncate(transcript, 60)}"_`);
+        } else {
+          await tgSend(`🚀 *DSH [${project}]*: Đang bắt đầu xử lý yêu cầu...`);
+        }
+      } catch (err) {
+        await tgSend(`❌ Lỗi nhận diện giọng nói: ${err.message}`);
+      }
+      return;
+    }
+
+    // --- 2. Photo upload (Vision / Screenshot) ---
     if (msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0) {
       const photo = msg.photo[msg.photo.length - 1];
       const caption = (msg.caption || '').trim();
@@ -755,30 +1012,140 @@ export function apply(ctx, config = {}) {
     if (text === '/start' || text === '/help') {
       await tgSend(
         `🤖 *DeepSeek Harness Telegram Bot*\n` +
-        `Đã kết nối với DSH trên máy Mac.\n\n` +
-        `*Lệnh điều khiển:*\n` +
+        `Điều khiển AI lập trình toàn diện từ điện thoại.\n\n` +
+        `*Quản lý Session & Workspace:*\n` +
         `• /sessions - Xem danh sách & chọn Session chat\n` +
         `• /switch <số> - Đổi sang Session khác\n` +
-        `• /model - Xem & đổi Model AI (Gemini, Claude, GPT)\n` +
-        `• /diff - Xem chi tiết mã nguồn vừa sửa (Git Diff)\n` +
+        `• /workspaces - Danh sách thư mục Workspace\n` +
+        `• /cd <path> - Đổi thư mục làm việc\n` +
         `• /new - Mở một phiên làm việc mới\n` +
-        `• /status - Xem chi tiết Session đang chọn\n` +
-        `• /stop - Dừng khẩn cấp lượt chạy hiện tại\n` +
-        `• /files - Xem danh sách file vừa được sửa\n` +
-        `• /help - Xem hướng dẫn sử dụng\n\n` +
-        `📷 *Gửi ảnh:* Gửi ảnh chụp màn hình trực tiếp để Agent đọc ảnh và fix bug.\n\n` +
-        `💬 *Gửi prompt từ xa:* Gõ bất kỳ tin nhắn nào, Agent trong Session đang chọn sẽ thực thi ngay.`,
+        `• /status - Xem chi tiết Session & Workspace hiện tại\n\n` +
+        `*Công cụ kỹ thuật & Mã nguồn:*\n` +
+        `• /diff - Xem chi tiết mã nguồn vừa sửa (Git Diff)\n` +
+        `• /sh <lệnh> - Chạy lệnh terminal trực tiếp (0 token)\n` +
+        `• /get <file> - Tải file từ máy Mac về Telegram\n` +
+        `• /files - Xem danh sách file vừa sửa\n` +
+        `• /model - Xem & đổi Model AI (Gemini, Claude, GPT)\n` +
+        `• /stop - Dừng khẩn cấp lượt chạy hiện tại\n\n` +
+        `🎙 *Tin nhắn thoại*: Gửi Voice Message để bot chuyển thành prompt chữ.\n` +
+        `📷 *Gửi ảnh*: Gửi ảnh chụp màn hình để Agent đọc và sửa code.\n` +
+        `💬 *Gửi prompt*: Gõ tin nhắn bất kỳ để Agent thực thi.`,
       );
       return;
     }
 
-    // --- 2. Model selection (/model) ---
+    // --- 3. Run Shell command (/sh or /bash) ---
+    if (text.startsWith('/sh') || text.startsWith('/bash')) {
+      const cmd = text.replace(/^\/(?:sh|bash)\s*/, '').trim();
+      const session = getActiveSession();
+      const cwd = session?.header?.cwd || process.cwd();
+      const project = getProjectName(session);
+
+      if (!cmd) {
+        await tgSend('ℹ️ *Cách dùng*: `/sh <lệnh shell>`\nVí dụ: `/sh git status`, `/sh git log -3`, `/sh pm2 status`');
+        return;
+      }
+
+      await tgSendChatAction('typing');
+      const start = Date.now();
+
+      execFile('bash', ['-c', cmd], { cwd, timeout: 45000, maxBuffer: 1024 * 1024 }, async (err, stdout, stderr) => {
+        const elapsed = formatDuration(Date.now() - start);
+        const combined = ((stdout || '') + (stderr ? (stdout ? '\n' : '') + stderr : '')).trim();
+
+        if (err && !combined) {
+          await tgSend(`❌ *Lệnh*: \`${cmd}\` (${elapsed}) [${project}]\n*Lỗi*: ${err.message}`);
+          return;
+        }
+
+        const header = `💻 *\`${cmd}\`* [${project}] (${elapsed}):\n`;
+        if (!combined) {
+          await tgSend(`${header}_(Lệnh thực thi thành công, không có output)_`);
+          return;
+        }
+
+        if (combined.length <= 3200) {
+          await tgSend(`${header}\`\`\`\n${combined}\n\`\`\``);
+        } else {
+          const truncatedText = combined.slice(0, 3000);
+          await tgSend(`${header}\`\`\`\n${truncatedText}\n\`\`\`\n_(Output dài ${combined.length} ký tự, đã rút gọn)_`);
+        }
+      });
+      return;
+    }
+
+    // --- 4. Get File from Mac (/get) ---
+    if (text.startsWith('/get')) {
+      const parts = text.split(/\s+/);
+      const targetFile = parts[1];
+      const session = getActiveSession();
+      const cwd = session?.header?.cwd || process.cwd();
+      const project = getProjectName(session);
+
+      if (!targetFile) {
+        const state = session ? getSessionState(session.id) : null;
+        let hint = `ℹ️ *Cách dùng*: \`/get <đường dẫn file>\`\nVí dụ: \`/get package.json\`\n`;
+        if (state && state.modifiedFiles.size > 0) {
+          hint += `\n*Các file vừa sửa có thể tải:*\n${Array.from(state.modifiedFiles).map(f => `• \`/get ${f}\``).join('\n')}`;
+        }
+        await tgSend(hint);
+        return;
+      }
+
+      const resolved = isAbsolute(targetFile) ? targetFile : join(cwd, targetFile);
+      if (!existsSync(resolved)) {
+        await tgSend(`❌ File không tồn tại trong workspace [${project}]: \`${targetFile}\``);
+        return;
+      }
+
+      const stat = statSync(resolved);
+      if (stat.isDirectory()) {
+        await tgSend(`❌ \`${targetFile}\` là thư mục, không phải file.`);
+        return;
+      }
+
+      if (stat.size > 50 * 1024 * 1024) {
+        await tgSend(`❌ File quá lớn (${formatBytes(stat.size)}), Telegram chỉ hỗ trợ gửi file tối đa 50MB.`);
+        return;
+      }
+
+      await tgSendChatAction('upload_document');
+      const sent = await tgSendDocument(resolved, `📄 [${project}] ${basename(resolved)}`);
+      if (!sent?.ok) {
+        await tgSend(`❌ Lỗi gửi file: ${sent?.description || 'Không gửi được'}`);
+      }
+      return;
+    }
+
+    // --- 5. Workspaces & CD (/workspaces, /cd) ---
+    if (text === '/workspaces' || text === '/ws') {
+      await showWorkspacesMenu();
+      return;
+    }
+
+    if (text.startsWith('/cd')) {
+      const parts = text.split(/\s+/);
+      const targetDir = parts.slice(1).join(' ').trim();
+      const session = getActiveSession();
+      const currentCwd = session?.header?.cwd || process.cwd();
+
+      if (!targetDir) {
+        await showWorkspacesMenu();
+        return;
+      }
+
+      const resolved = isAbsolute(targetDir) ? targetDir : join(currentCwd, targetDir);
+      await changeWorkspace(resolved);
+      return;
+    }
+
+    // --- 6. Model selection (/model) ---
     if (text === '/model' || text === '/models') {
       await showModelSelectionMenu();
       return;
     }
 
-    // --- 3. Git Diff (/diff) ---
+    // --- 7. Git Diff (/diff) ---
     if (text === '/diff') {
       const session = getActiveSession();
       const cwd = session?.header?.cwd || process.cwd();
@@ -871,20 +1238,22 @@ export function apply(ctx, config = {}) {
       await tgSend(
         `📊 *Trạng thái DeepSeek Harness*\n\n` +
         `• *Project*: \`${project}\`\n` +
+        `• *Thư mục*: \`${session?.header?.cwd || process.cwd()}\`\n` +
         `• *Session đang chọn*: \`${session?.id || 'Không có'}\`\n` +
         `• *Model*: \`${currentModel}\`\n` +
         `• *Trạng thái*: ${statusText}\n` +
         `• *File vừa sửa*: ${fileCount} file\n` +
         (state?.lastPrompt ? `• *Prompt gần nhất*: _"${truncate(state.lastPrompt, 60)}"_\n` : '') +
-        `\n_Lệnh: /sessions (đổi session), /model (đổi model), /diff (xem code sửa)._`,
+        `\n_Lệnh: /sessions, /workspaces, /model, /diff, /sh._`,
       );
       return;
     }
 
     if (text === '/new') {
       try {
+        const cwd = getActiveSession()?.header?.cwd || process.cwd();
         if (typeof ctx.agents?.create === 'function') {
-          const handle = await ctx.agents.create({ meta: { cwd: process.cwd() } });
+          const handle = await ctx.agents.create({ meta: { cwd } });
           const newSession = handle?.agent?.session;
           if (newSession) {
             selectedSessionId = newSession.id;
@@ -920,7 +1289,7 @@ export function apply(ctx, config = {}) {
       const session = getActiveSession();
       const state = session ? getSessionState(session.id) : null;
       if (state && state.modifiedFiles.size > 0) {
-        const list = Array.from(state.modifiedFiles).map(f => `• \`${f}\``).join('\n');
+        const list = Array.from(state.modifiedFiles).map(f => `• \`${f}\`  (tải bằng: \`/get ${f}\`)`).join('\n');
         await tgSend(`📁 *Các file đã sửa gần nhất:*\n${list}`);
       } else {
         await tgSend('ℹ️ Chưa có file nào được sửa đổi trong lượt gần nhất.');
@@ -993,6 +1362,61 @@ export function apply(ctx, config = {}) {
     const chatId = cq.message.chat.id;
     const msgId = cq.message.message_id;
 
+    if (data === 'act:diff') {
+      const session = getActiveSession();
+      const cwd = session?.header?.cwd || process.cwd();
+      const diffResult = await runGitDiff(cwd);
+      if (!diffResult.ok) {
+        await tgSend(`❌ ${diffResult.error}`);
+        return;
+      }
+      if (diffResult.clean) {
+        await tgSend('ℹ️ Working tree đang sạch, không có thay đổi nào chưa commit.');
+        return;
+      }
+      const truncatedDiff = truncate(diffResult.diff, 2800);
+      await tgSend(`📄 *Git Diff:*\n\`\`\`diff\n${truncatedDiff}\n\`\`\``);
+      return;
+    }
+
+    if (data === 'act:files') {
+      const session = getActiveSession();
+      const state = session ? getSessionState(session.id) : null;
+      if (state && state.modifiedFiles.size > 0) {
+        const list = Array.from(state.modifiedFiles).map(f => `• \`${f}\` (gõ \`/get ${f}\` để tải)`).join('\n');
+        await tgSend(`📁 *Các file đã sửa:*\n${list}`);
+      } else {
+        await tgSend('ℹ️ Chưa có file nào được sửa đổi.');
+      }
+      return;
+    }
+
+    if (data === 'act:gitstatus') {
+      const session = getActiveSession();
+      const cwd = session?.header?.cwd || process.cwd();
+      execFile('git', ['status', '--short'], { cwd }, async (err, stdout) => {
+        if (err) {
+          await tgSend(`❌ Lỗi git status: ${err.message}`);
+          return;
+        }
+        const out = (stdout || '').trim();
+        await tgSend(`🚀 *Git Status:*\n\`\`\`\n${out || 'Working tree sạch.'}\n\`\`\``);
+      });
+      return;
+    }
+
+    if (data.startsWith('cd:')) {
+      const idx = Number.parseInt(data.replace('cd:', ''), 10);
+      const workspaces = listAvailableWorkspaces(ctx);
+      const chosen = workspaces[idx];
+      if (chosen && chosen.path) {
+        await changeWorkspace(chosen.path);
+      } else {
+        await tgEdit(chatId, msgId, '❌ Workspace không còn khả dụng.');
+      }
+      return;
+    }
+
     if (data.startsWith('model:')) {
       const idx = Number.parseInt(data.replace('model:', ''), 10);
       const chosen = POPULAR_MODELS[idx];
@@ -1034,8 +1458,9 @@ export function apply(ctx, config = {}) {
 
     if (data === 'cmd:new') {
       try {
+        const cwd = getActiveSession()?.header?.cwd || process.cwd();
         if (typeof ctx.agents?.create === 'function') {
-          const handle = await ctx.agents.create({ meta: { cwd: process.cwd() } });
+          const handle = await ctx.agents.create({ meta: { cwd } });
           const newSession = handle?.agent?.session;
           if (newSession) {
             selectedSessionId = newSession.id;
@@ -1109,7 +1534,7 @@ export function apply(ctx, config = {}) {
       console.info(`[dsh-sound-notifier] Telegram Bot active: @${me.result.username}`);
       await syncBotCommands(botToken);
       if (!botChatId) {
-        console.info('[dsh-sound-notifier] Send /start to @' + me.result.username + ' to pair your Telegram chat.');
+        console.info(`[dsh-sound-notifier] Send /start to @${me.result.username} to pair your Telegram chat.`);
       }
     } catch (e) {
       console.warn('[dsh-sound-notifier] Telegram connection check failed:', e.message);
@@ -1173,7 +1598,6 @@ export function apply(ctx, config = {}) {
 
     return new Promise((resolve) => {
       pendingApprovals.set(req.id, resolve);
-      // Let Web GUI also decide if user acts there first
       next().then((outcome) => {
         if (pendingApprovals.has(req.id)) {
           pendingApprovals.delete(req.id);
@@ -1273,6 +1697,17 @@ export function apply(ctx, config = {}) {
       let args = event.data.arguments;
       if (typeof args === 'string') {
         try { args = JSON.parse(args); } catch {}
+      }
+
+      // Check if deliverables presented
+      if (toolName === 'present' && args?.files && Array.isArray(args.files)) {
+        const cwd = session.header?.cwd || process.cwd();
+        for (const f of args.files) {
+          const fPath = f.path ? (isAbsolute(f.path) ? f.path : join(cwd, f.path)) : null;
+          if (fPath && existsSync(fPath)) {
+            tgSendDocument(fPath, `🎁 File bàn giao: ${f.description || basename(fPath)}`);
+          }
+        }
       }
 
       if (toolName === 'ask_user_question') {
@@ -1401,7 +1836,7 @@ export function apply(ctx, config = {}) {
           );
         }
 
-        // 2. Telegram: Update progress card to completed status
+        // 2. Telegram: Update progress card and send Action Bar
         if (botToken && botChatId) {
           const fileLine = fileCount > 0 ? `📁 *File đã sửa:* ${Array.from(state.modifiedFiles).join(', ')}` : `⚡ Hoàn tất (${state.toolCallsCount} steps)`;
           const promptLine = state.lastPrompt ? `📝 _"${truncate(state.lastPrompt, 75)}"_\n` : '';
@@ -1416,14 +1851,32 @@ export function apply(ctx, config = {}) {
             );
           }
 
+          const actionMarkup = {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '📄 Xem Diff', callback_data: 'act:diff' },
+                  { text: '📁 File đã sửa', callback_data: 'act:files' },
+                ],
+                [
+                  { text: '🚀 Git Status', callback_data: 'act:gitstatus' },
+                  { text: '🔄 Session mới', callback_data: 'cmd:new' },
+                ],
+              ],
+            },
+          };
+
           // Send assistant response text (chunked if long)
           if (assistantText) {
             const chunks = splitMessage(assistantText);
-            for (const chunk of chunks) {
-              tgSend(chunk);
+            for (let i = 0; i < chunks.length; i++) {
+              const isLast = i === chunks.length - 1;
+              tgSend(chunks[i], isLast ? actionMarkup : {});
             }
           } else if (!state.progressMsgId) {
-            tgSend(`✅ *DSH [${project}] • Hoàn thành (${duration})*\n${promptLine}${fileLine}`);
+            tgSend(`✅ *DSH [${project}] • Hoàn thành (${duration})*\n${promptLine}${fileLine}`, actionMarkup);
+          } else {
+            tgSend(`🎉 *Lượt xử lý hoàn tất!* Bạn có thể xem kết quả hoặc chọn tác vụ nhanh:`, actionMarkup);
           }
         }
       } else if (kind === 'error') {
@@ -1441,6 +1894,17 @@ export function apply(ctx, config = {}) {
         }
 
         if (botToken && botChatId) {
+          const errorMarkup = {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '📄 Xem Diff', callback_data: 'act:diff' },
+                  { text: '🔄 Thử Session Mới', callback_data: 'cmd:new' },
+                ],
+              ],
+            },
+          };
+
           if (state.progressMsgId) {
             tgEdit(
               botChatId,
@@ -1449,6 +1913,7 @@ export function apply(ctx, config = {}) {
               `• *Lỗi*: ${errMsg}\n` +
               (state.lastPrompt ? `• *Yêu cầu*: _"${truncate(state.lastPrompt, 70)}"_\n` : '') +
               `• Dừng sau ${state.toolCallsCount} steps.`,
+              errorMarkup,
             );
           } else {
             tgSend(
@@ -1456,6 +1921,7 @@ export function apply(ctx, config = {}) {
               `• *Lỗi*: ${errMsg}\n` +
               (state.lastPrompt ? `• *Yêu cầu*: _"${truncate(state.lastPrompt, 70)}"_\n` : '') +
               `• Dừng sau ${state.toolCallsCount} steps.`,
+              errorMarkup,
             );
           }
         }
@@ -1510,5 +1976,5 @@ export function apply(ctx, config = {}) {
     abortController.abort();
   });
 
-  console.info('[dsh-sound-notifier] Active: Sounds + Desktop Notification + 2-way Telegram Bot + Vision + Diff + Model Switcher.');
+  console.info('[dsh-sound-notifier] Active: Sounds + Desktop Notification + 2-way Telegram Bot (Vision, Voice, Shell, Files, Workspaces, Action Bar).');
 }
