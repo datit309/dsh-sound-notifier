@@ -1,0 +1,16 @@
+{
+  "name": "dsh-sound-notifier",
+  "version": "1.0.0",
+  "description": "Sound and desktop notifications for DSH task completion, errors, and approvals",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
