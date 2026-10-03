@@ -120,6 +120,12 @@ function truncate(str, maxLen = 80) {
   return clean.length > maxLen ? `${clean.slice(0, maxLen - 3)}...` : clean;
 }
 
+function truncateLines(str, maxLen = 3000) {
+  if (!str || typeof str !== 'string') return '';
+  if (str.length <= maxLen) return str;
+  return `${str.slice(0, maxLen - 3)}...`;
+}
+
 function formatDuration(ms) {
   const sec = Math.max(1, Math.round(ms / 1000));
   if (sec < 60) return `${sec}s`;
@@ -1478,194 +1484,223 @@ export function apply(ctx, config = {}) {
 
   // Handle Telegram button clicks (Inline Keyboard)
   async function handleTelegramCallback(cq) {
-    await tgAnswerCallback(cq.id, 'Đã ghi nhận!');
-    const data = cq.data || '';
-    const chatId = cq.message.chat.id;
-    const msgId = cq.message.message_id;
+    try {
+      await tgAnswerCallback(cq.id, 'Đã ghi nhận!');
+      const fromId = String(cq.from?.id || '');
+      if (botChatId && fromId !== botChatId) return;
 
-    if (data === 'act:diff') {
-      const session = getActiveSession();
-      const cwd = session?.header?.cwd || process.cwd();
-      const diffResult = await runGitDiff(cwd);
-      if (!diffResult.ok) {
-        await tgSend(`❌ ${diffResult.error}`);
-        return;
-      }
-      if (diffResult.clean) {
-        await tgSend('ℹ️ Working tree đang sạch, không có thay đổi nào chưa commit.');
-        return;
-      }
-      const truncatedDiff = truncate(diffResult.diff, 2800);
-      await tgSend(`📄 *Git Diff:*\n\`\`\`diff\n${truncatedDiff}\n\`\`\``);
-      return;
-    }
+      const data = cq.data || '';
+      const chatId = cq.message?.chat?.id || botChatId;
+      const msgId = cq.message?.message_id;
 
-    if (data === 'act:files') {
-      const session = getActiveSession();
-      const state = session ? getSessionState(session.id) : null;
-      if (state && state.modifiedFiles.size > 0) {
-        const list = Array.from(state.modifiedFiles).map(f => `• \`${f}\` (gõ \`/get ${f}\` để tải)`).join('\n');
-        await tgSend(`📁 *Các file đã sửa:*\n${list}`);
-      } else {
-        await tgSend('ℹ️ Chưa có file nào được sửa đổi.');
-      }
-      return;
-    }
-
-    if (data === 'act:gitstatus') {
-      const session = getActiveSession();
-      const cwd = session?.header?.cwd || process.cwd();
-      execFile('git', ['status', '--short'], { cwd }, async (err, stdout) => {
-        if (err) {
-          await tgSend(`❌ Lỗi git status: ${err.message}`);
+      if (data === 'act:diff') {
+        const session = getActiveSession();
+        const cwd = session?.header?.cwd || process.cwd();
+        const diffResult = await runGitDiff(cwd);
+        if (!diffResult.ok) {
+          await tgSend(`❌ ${diffResult.error}`);
           return;
         }
-        const out = (stdout || '').trim();
-        await tgSend(`🚀 *Git Status:*\n\`\`\`\n${out || 'Working tree sạch.'}\n\`\`\``);
-      });
-      return;
-    }
-
-    if (data.startsWith('get:')) {
-      const targetFile = data.replace('get:', '');
-      const session = getActiveSession();
-      const cwd = session?.header?.cwd || process.cwd();
-      const project = getProjectName(session);
-
-      const resolved = isAbsolute(targetFile) ? targetFile : join(cwd, targetFile);
-      if (!existsSync(resolved)) {
-        await tgSend(`❌ File không còn tồn tại: \`${targetFile}\``);
+        if (diffResult.clean) {
+          await tgSend('ℹ️ Working tree đang sạch, không có thay đổi nào chưa commit.');
+          return;
+        }
+        const truncatedDiff = truncateLines(diffResult.diff, 2800);
+        await tgSend(`📄 *Git Diff:*\n\`\`\`diff\n${truncatedDiff}\n\`\`\``);
         return;
       }
-      await tgSendChatAction('upload_document');
-      const sent = await tgSendDocument(resolved, `📄 [${project}] ${basename(resolved)}`);
-      if (!sent?.ok) {
-        await tgSend(`❌ Lỗi gửi file: ${sent?.description || 'Không gửi được'}`);
-      }
-      return;
-    }
 
-    if (data === 'act:mute') {
-      soundEnabled = false;
-      await tgEdit(chatId, msgId, '🔇 *Đã tắt âm thanh loa Mac.*');
-      return;
-    }
+      if (data === 'act:files') {
+        const session = getActiveSession();
+        const cwd = session?.header?.cwd || process.cwd();
+        const state = session ? getSessionState(session.id) : null;
+        let filesArr = state && state.modifiedFiles.size > 0 ? Array.from(state.modifiedFiles) : [];
 
-    if (data === 'act:unmute') {
-      soundEnabled = true;
-      await tgEdit(chatId, msgId, '🔊 *Đã bật lại âm thanh loa Mac.*');
-      return;
-    }
+        if (filesArr.length === 0) {
+          try {
+            const out = await new Promise(res => execFile('git', ['status', '--short'], { cwd }, (_, stdout) => res(stdout || '')));
+            const gitFiles = out.split('\n').map(l => l.trim().slice(3)).filter(Boolean);
+            if (gitFiles.length > 0) filesArr = gitFiles;
+          } catch {}
+        }
 
-    if (data.startsWith('cd:')) {
-      const idx = Number.parseInt(data.replace('cd:', ''), 10);
-      const workspaces = listAvailableWorkspaces(ctx);
-      const chosen = workspaces[idx];
-      if (chosen && chosen.path) {
-        await changeWorkspace(chosen.path);
-      } else {
-        await tgEdit(chatId, msgId, '❌ Workspace không còn khả dụng.');
-      }
-      return;
-    }
-
-    if (data.startsWith('model:')) {
-      const idx = Number.parseInt(data.replace('model:', ''), 10);
-      const chosen = POPULAR_MODELS[idx];
-      const session = getActiveSession();
-      if (!session || !chosen) {
-        await tgEdit(chatId, msgId, '❌ Không thể đổi model lúc này.');
+        if (filesArr.length > 0) {
+          const list = filesArr.map(f => `• \`${f}\``).join('\n');
+          const buttons = filesArr.slice(0, 8).map(f => [{ text: `📥 Tải ${basename(f)}`, callback_data: `get:${f}` }]);
+          await tgSend(`📁 *Các file đã sửa:*\n${list}\n\n_Bấm nút bên dưới để tải về điện thoại:_`, {
+            reply_markup: { inline_keyboard: buttons },
+          });
+        } else {
+          await tgSend('ℹ️ Chưa có file nào được sửa đổi.');
+        }
         return;
       }
-      try {
-        session.append('model/selection', { provider: 'bee-router', model: chosen.id });
-        const project = getProjectName(session);
-        await tgEdit(
-          chatId,
-          msgId,
-          `✅ *Đã đổi Model cho Session [${project}]:*\n• *Model mới*: \`${chosen.id}\` (${chosen.label})\nCác prompt tiếp theo sẽ chạy trên model này.`,
-        );
-      } catch (e) {
-        await tgEdit(chatId, msgId, `❌ Lỗi khi đổi model: ${e.message}`);
-      }
-      return;
-    }
 
-    if (data.startsWith('switch:')) {
-      const targetId = data.replace('switch:', '');
-      const s = ctx.sessions?.get(targetId);
-      if (s) {
-        selectedSessionId = s.id;
-        const summary = getSessionSummary(s);
-        await tgEdit(
-          chatId,
-          msgId,
-          `✅ *Đã chuyển sang session:*\n• *Project*: \`${summary.project}\`\n• *ID*: \`${s.id}\`\nMọi prompt bạn gửi tiếp theo sẽ chạy trong session này.`,
-        );
-      } else {
-        await tgEdit(chatId, msgId, `❌ Session \`${targetId}\` không còn tồn tại.`);
-      }
-      return;
-    }
-
-    if (data === 'cmd:new') {
-      try {
-        const cwd = getActiveSession()?.header?.cwd || process.cwd();
-        if (typeof ctx.agents?.create === 'function') {
-          const handle = await ctx.agents.create({ meta: { cwd } });
-          const newSession = handle?.agent?.session;
-          if (newSession) {
-            selectedSessionId = newSession.id;
-            lastActiveSessionId = newSession.id;
-            await tgEdit(
-              chatId,
-              msgId,
-              `✨ *Đã tạo session mới*: \`${newSession.id}\`\n` +
-              `• *Workspace*: \`${getProjectName(newSession)}\`\n` +
-              `Đã tự động chọn session này làm active. Bạn có thể gửi prompt trực tiếp từ đây.`,
-            );
+      if (data === 'act:gitstatus') {
+        const session = getActiveSession();
+        const cwd = session?.header?.cwd || process.cwd();
+        execFile('git', ['status', '--short'], { cwd }, async (err, stdout) => {
+          if (err) {
+            await tgSend(`❌ Lỗi git status: ${err.message}`);
             return;
           }
-        }
-        await tgEdit(chatId, msgId, '❌ Không thể khởi tạo session mới trên Host.');
-      } catch (e) {
-        await tgEdit(chatId, msgId, `❌ Lỗi tạo session: ${e.message}`);
-      }
-      return;
-    }
-
-    if (data.startsWith('appr:')) {
-      const [, action, reqId] = data.split(':');
-      const resolve = pendingApprovals.get(reqId);
-      if (resolve) {
-        pendingApprovals.delete(reqId);
-        const approved = action === 'allow';
-        resolve(approved ? 'allowed-once' : 'rejected');
-        await tgEdit(
-          chatId,
-          msgId,
-          approved
-            ? '✅ *Đã cho phép thao tác (xác nhận từ Telegram)*'
-            : '❌ *Đã từ chối thao tác (từ Telegram)*',
-        );
-      }
-    } else if (data.startsWith('ask:')) {
-      const [, callId, optIdxStr] = data.split(':');
-      const item = pendingQuestions.get(callId);
-      if (item) {
-        pendingQuestions.delete(callId);
-        const idx = Number.parseInt(optIdxStr, 10);
-        const q = item.questions?.[0];
-        const selectedLabel = q?.options?.[idx]?.label || 'Đồng ý';
-        const qId = q?.id || 'question';
-        item.resolve({
-          answers: [{
-            id: qId,
-            selected: [selectedLabel],
-          }],
+          const out = (stdout || '').trim();
+          await tgSend(`🚀 *Git Status:*\n\`\`\`\n${out || 'Working tree sạch.'}\n\`\`\``);
         });
-        await tgEdit(chatId, msgId, `☑️ *Đã chọn*: *${selectedLabel}*`);
+        return;
       }
+
+      if (data.startsWith('get:')) {
+        const targetFile = data.replace('get:', '');
+        const session = getActiveSession();
+        const cwd = session?.header?.cwd || process.cwd();
+        const project = getProjectName(session);
+
+        const resolved = isAbsolute(targetFile) ? targetFile : join(cwd, targetFile);
+        if (!existsSync(resolved)) {
+          await tgSend(`❌ File không còn tồn tại: \`${targetFile}\``);
+          return;
+        }
+        await tgSendChatAction('upload_document');
+        const sent = await tgSendDocument(resolved, `📄 [${project}] ${basename(resolved)}`);
+        if (!sent?.ok) {
+          await tgSend(`❌ Lỗi gửi file: ${sent?.description || 'Không gửi được'}`);
+        }
+        return;
+      }
+
+      if (data === 'act:mute') {
+        soundEnabled = false;
+        if (msgId) await tgEdit(chatId, msgId, '🔇 *Đã tắt âm thanh loa Mac.*');
+        else await tgSend('🔇 *Đã tắt âm thanh loa Mac.*');
+        return;
+      }
+
+      if (data === 'act:unmute') {
+        soundEnabled = true;
+        if (msgId) await tgEdit(chatId, msgId, '🔊 *Đã bật lại âm thanh loa Mac.*');
+        else await tgSend('🔊 *Đã bật lại âm thanh loa Mac.*');
+        return;
+      }
+
+      if (data.startsWith('cd:')) {
+        const idx = Number.parseInt(data.replace('cd:', ''), 10);
+        const workspaces = listAvailableWorkspaces(ctx);
+        const chosen = workspaces[idx];
+        if (chosen && chosen.path) {
+          await changeWorkspace(chosen.path);
+        } else {
+          if (msgId) await tgEdit(chatId, msgId, '❌ Workspace không còn khả dụng.');
+          else await tgSend('❌ Workspace không còn khả dụng.');
+        }
+        return;
+      }
+
+      if (data.startsWith('model:')) {
+        const idx = Number.parseInt(data.replace('model:', ''), 10);
+        const chosen = POPULAR_MODELS[idx];
+        const session = getActiveSession();
+        if (!session || !chosen) {
+          if (msgId) await tgEdit(chatId, msgId, '❌ Không thể đổi model lúc này.');
+          else await tgSend('❌ Không thể đổi model lúc này.');
+          return;
+        }
+        try {
+          session.append('model/selection', { provider: 'bee-router', model: chosen.id });
+          const project = getProjectName(session);
+          const confirmText = `✅ *Đã đổi Model cho Session [${project}]:*\n• *Model mới*: \`${chosen.id}\` (${chosen.label})\nCác prompt tiếp theo sẽ chạy trên model này.`;
+          if (msgId) await tgEdit(chatId, msgId, confirmText);
+          else await tgSend(confirmText);
+        } catch (e) {
+          const errText = `❌ Lỗi khi đổi model: ${e.message}`;
+          if (msgId) await tgEdit(chatId, msgId, errText);
+          else await tgSend(errText);
+        }
+        return;
+      }
+
+      if (data.startsWith('switch:')) {
+        const targetId = data.replace('switch:', '');
+        const sessions = ctx.sessions?.list?.() || [];
+        const s = ctx.sessions?.get(targetId) || sessions.find(item => item.id === targetId);
+        if (s) {
+          selectedSessionId = s.id;
+          const summary = getSessionSummary(s);
+          const confirmText = `✅ *Đã chuyển sang session:*\n• *Project*: \`${summary.project}\`\n• *ID*: \`${s.id}\`\nMọi prompt bạn gửi tiếp theo sẽ chạy trong session này.`;
+          if (msgId) await tgEdit(chatId, msgId, confirmText);
+          else await tgSend(confirmText);
+        } else {
+          const errText = `❌ Session \`${targetId}\` không còn tồn tại.`;
+          if (msgId) await tgEdit(chatId, msgId, errText);
+          else await tgSend(errText);
+        }
+        return;
+      }
+
+      if (data === 'cmd:new') {
+        try {
+          const cwd = getActiveSession()?.header?.cwd || process.cwd();
+          if (typeof ctx.agents?.create === 'function') {
+            const handle = await ctx.agents.create({ meta: { cwd } });
+            const newSession = handle?.agent?.session;
+            if (newSession) {
+              selectedSessionId = newSession.id;
+              lastActiveSessionId = newSession.id;
+              const confirmText = `✨ *Đã tạo session mới*: \`${newSession.id}\`\n• *Workspace*: \`${getProjectName(newSession)}\`\nĐã tự động chọn session này làm active. Bạn có thể gửi prompt trực tiếp từ đây.`;
+              if (msgId) await tgEdit(chatId, msgId, confirmText);
+              else await tgSend(confirmText);
+              return;
+            }
+          }
+          if (msgId) await tgEdit(chatId, msgId, '❌ Không thể khởi tạo session mới trên Host.');
+          else await tgSend('❌ Không thể khởi tạo session mới trên Host.');
+        } catch (e) {
+          const errText = `❌ Lỗi tạo session: ${e.message}`;
+          if (msgId) await tgEdit(chatId, msgId, errText);
+          else await tgSend(errText);
+        }
+        return;
+      }
+
+      if (data.startsWith('appr:')) {
+        const [, action, reqId] = data.split(':');
+        const resolve = pendingApprovals.get(reqId);
+        if (resolve) {
+          pendingApprovals.delete(reqId);
+          const approved = action === 'allow';
+          resolve(approved ? 'allowed-once' : 'rejected');
+          const confirmText = approved
+            ? '✅ *Đã cho phép thao tác (xác nhận từ Telegram)*'
+            : '❌ *Đã từ chối thao tác (từ Telegram)*';
+          if (msgId) await tgEdit(chatId, msgId, confirmText);
+          else await tgSend(confirmText);
+        }
+        return;
+      }
+
+      if (data.startsWith('ask:')) {
+        const [, callId, optIdxStr] = data.split(':');
+        const item = pendingQuestions.get(callId);
+        if (item) {
+          pendingQuestions.delete(callId);
+          const idx = Number.parseInt(optIdxStr, 10);
+          const q = item.questions?.[0];
+          const selectedLabel = q?.options?.[idx]?.label || 'Đồng ý';
+          const qId = q?.id || 'question';
+          item.resolve({
+            answers: [{
+              id: qId,
+              selected: [selectedLabel],
+            }],
+          });
+          const confirmText = `☑️ *Đã chọn*: *${selectedLabel}*`;
+          if (msgId) await tgEdit(chatId, msgId, confirmText);
+          else await tgSend(confirmText);
+        }
+        return;
+      }
+    } catch (err) {
+      console.error('[dsh-sound-notifier] Error in handleTelegramCallback:', err);
     }
   }
 
