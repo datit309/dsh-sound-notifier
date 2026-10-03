@@ -43,6 +43,29 @@ const POPULAR_MODELS = [
   { id: 'auto', label: '🔄 Auto Router' },
 ];
 
+const BOT_COMMANDS = [
+  { command: 'sessions', description: 'Danh sách & chọn session chat' },
+  { command: 'switch', description: 'Đổi sang session: /switch <số>' },
+  { command: 'model', description: 'Xem & đổi Model AI (Gemini, Claude, GPT)' },
+  { command: 'diff', description: 'Xem chi tiết code vừa sửa (Git Diff)' },
+  { command: 'new', description: 'Mở phiên làm việc mới' },
+  { command: 'status', description: 'Xem trạng thái Agent & Session' },
+  { command: 'stop', description: 'Dừng khẩn cấp lượt chạy hiện tại' },
+  { command: 'files', description: 'Xem danh sách file vừa sửa' },
+  { command: 'help', description: 'Xem hướng dẫn sử dụng' },
+];
+
+async function syncBotCommands(token) {
+  if (!token) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ commands: BOT_COMMANDS }),
+    });
+  } catch {}
+}
+
 let lastSoundAt = 0;
 
 function readVolatile(val, fallback = undefined) {
@@ -410,7 +433,10 @@ export function apply(ctx, config = {}) {
                   try {
                     const r = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
                     const d = await r.json();
-                    if (d.ok) botInfo = d.result;
+                    if (d.ok) {
+                      botInfo = d.result;
+                      syncBotCommands(botToken);
+                    }
                   } catch {}
                 }
 
@@ -1081,6 +1107,7 @@ export function apply(ctx, config = {}) {
         return;
       }
       console.info(`[dsh-sound-notifier] Telegram Bot active: @${me.result.username}`);
+      await syncBotCommands(botToken);
       if (!botChatId) {
         console.info('[dsh-sound-notifier] Send /start to @' + me.result.username + ' to pair your Telegram chat.');
       }
