@@ -164,9 +164,18 @@ export function apply(ctx, config = {}) {
     return list[list.length - 1] || null;
   }
 
-  function getActiveAgent(session) {
+  async function resolveLiveAgent(session) {
     if (!session) return null;
-    return ctx.agents?.get(session.id) || null;
+    let agent = ctx.agents?.get(session.id);
+    if (!agent && typeof ctx.agents?.resume === 'function') {
+      try {
+        const handle = await ctx.agents.resume({ resumeSessionId: session.id });
+        agent = handle?.agent || ctx.agents.get(session.id);
+      } catch (e) {
+        console.warn('[dsh-sound-notifier] Failed to resume agent:', e.message);
+      }
+    }
+    return agent || null;
   }
 
   // --- Telegram Bot Engine ---
@@ -279,12 +288,14 @@ export function apply(ctx, config = {}) {
 
     if (text === '/start' || text === '/help') {
       await tgSend(
-        `🤖 *DeepSeek Harness Telegram Bot*\n\n` +
+        `🤖 *DeepSeek Harness Telegram Bot*\n` +
+        `Đã kết nối với DSH trên máy Mac.\n\n` +
         `*Lệnh điều khiển:*\n` +
-        `• /status - Xem trạng thái Agent & Workspace\n` +
+        `• /status - Xem trạng thái Agent, Session, Workspace\n` +
+        `• /new - Mở một phiên làm việc (Session) mới\n` +
         `• /stop - Dừng khẩn cấp lượt chạy hiện tại\n` +
         `• /files - Xem danh sách file vừa được sửa\n` +
-        `• /help - Xem lại hướng dẫn\n\n` +
+        `• /help - Xem hướng dẫn sử dụng\n\n` +
         `💬 *Gửi prompt từ xa:*\n` +
         `Gõ bất kỳ tin nhắn nào vào đây, Agent trên máy Mac sẽ nhận lệnh và thực thi ngay.`,
       );
@@ -293,7 +304,7 @@ export function apply(ctx, config = {}) {
 
     if (text === '/status') {
       const session = getActiveSession();
-      const agent = getActiveAgent(session);
+      const agent = await resolveLiveAgent(session);
       const project = getProjectName(session);
       const state = session ? getSessionState(session.id) : null;
       const statusText = agent ? (agent.status === 'running' ? '⚡ Đang chạy (running)' : '💤 Đang rảnh (idle)') : 'Chưa có Agent';
@@ -310,9 +321,31 @@ export function apply(ctx, config = {}) {
       return;
     }
 
+    if (text === '/new') {
+      try {
+        if (typeof ctx.agents?.create === 'function') {
+          const handle = await ctx.agents.create({ meta: { cwd: process.cwd() } });
+          const newSession = handle?.agent?.session;
+          if (newSession) {
+            lastActiveSessionId = newSession.id;
+            await tgSend(
+              `✨ *Đã tạo session mới*: \`${newSession.id}\`\n` +
+              `• *Workspace*: \`${getProjectName(newSession)}\`\n` +
+              `Bạn có thể gửi prompt trực tiếp từ đây.`,
+            );
+            return;
+          }
+        }
+        await tgSend('❌ Không thể khởi tạo session mới trên Host.');
+      } catch (e) {
+        await tgSend(`❌ Lỗi tạo session: ${e.message}`);
+      }
+      return;
+    }
+
     if (text === '/stop') {
       const session = getActiveSession();
-      const agent = getActiveAgent(session);
+      const agent = await resolveLiveAgent(session);
       if (agent && agent.status === 'running') {
         agent.cancel('user');
         await tgSend('🛑 *Đã gửi lệnh dừng tới Agent.*');
@@ -351,8 +384,20 @@ export function apply(ctx, config = {}) {
     }
 
     // Otherwise: Treat as user prompt for the Agent!
-    const session = getActiveSession();
-    const agent = getActiveAgent(session);
+    let session = getActiveSession();
+    let agent = await resolveLiveAgent(session);
+
+    if (!agent && typeof ctx.agents?.create === 'function') {
+      try {
+        const handle = await ctx.agents.create({ meta: { cwd: process.cwd() } });
+        agent = handle?.agent;
+        session = agent?.session || null;
+        if (session) lastActiveSessionId = session.id;
+      } catch (e) {
+        console.warn('[dsh-sound-notifier] Auto-create agent failed:', e.message);
+      }
+    }
+
     if (!agent) {
       await tgSend('⚠️ Không tìm thấy session hoặc agent đang mở trên máy Mac.');
       return;
