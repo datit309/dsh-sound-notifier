@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync,
 import { randomUUID } from 'node:crypto';
 import z from '@deepseek-ai/schemastery';
 
-export const name = 'dsh-sound-notifier';
+export const name = 'dsh-telegram-bridge';
 export const inject = ['sessions', 'agents'];
 
 /** Cordis configuration schema exposed directly to the DSH Web Settings UI. */
@@ -274,7 +274,7 @@ function saveTelegramConfig(filePath, token, chatId) {
   try {
     writeFileSync(filePath, JSON.stringify({ token, chatId }, null, 2), 'utf8');
   } catch (e) {
-    console.error('[dsh-sound-notifier] Failed to save telegram.json:', e.message);
+    console.error('[dsh-telegram-bridge] Failed to save telegram.json:', e.message);
   }
 }
 
@@ -441,7 +441,7 @@ export function apply(ctx, config = {}) {
         const handle = await ctx.agents.resume({ resumeSessionId: session.id });
         agent = handle?.agent || ctx.agents.get(session.id);
       } catch (e) {
-        console.warn('[dsh-sound-notifier] Failed to resume agent:', e.message);
+        console.warn('[dsh-telegram-bridge] Failed to resume agent:', e.message);
       }
     }
     return agent || null;
@@ -464,7 +464,7 @@ export function apply(ctx, config = {}) {
       scope.effect(() => {
         const d1 = scope.webServer.register({
           kind: 'exact',
-          path: '/api/dsh-sound-notifier/config',
+          path: '/api/dsh-telegram-bridge/config',
           handler: async (req, res) => {
             if (req.method === 'GET') {
               const effective = loadTelegramConfig(config);
@@ -528,7 +528,7 @@ export function apply(ctx, config = {}) {
 
         const d2 = scope.webServer.register({
           kind: 'exact',
-          path: '/api/dsh-sound-notifier/test',
+          path: '/api/dsh-telegram-bridge/test',
           handler: async (req, res) => {
             if (req.method !== 'POST') {
               sendJson(res, 405, { error: 'Method Not Allowed' });
@@ -607,7 +607,7 @@ export function apply(ctx, config = {}) {
       }
       return data;
     } catch (err) {
-      console.warn('[dsh-sound-notifier] Telegram send error:', err.message);
+      console.warn('[dsh-telegram-bridge] Telegram send error:', err.message);
       return null;
     }
   }
@@ -646,7 +646,7 @@ export function apply(ctx, config = {}) {
       });
       return await res.json();
     } catch (err) {
-      console.warn('[dsh-sound-notifier] sendDocument error:', err.message);
+      console.warn('[dsh-telegram-bridge] sendDocument error:', err.message);
       return null;
     }
   }
@@ -1454,7 +1454,7 @@ export function apply(ctx, config = {}) {
           lastActiveSessionId = session.id;
         }
       } catch (e) {
-        console.warn('[dsh-sound-notifier] Auto-create agent failed:', e.message);
+        console.warn('[dsh-telegram-bridge] Auto-create agent failed:', e.message);
       }
     }
 
@@ -1700,14 +1700,14 @@ export function apply(ctx, config = {}) {
         return;
       }
     } catch (err) {
-      console.error('[dsh-sound-notifier] Error in handleTelegramCallback:', err);
+      console.error('[dsh-telegram-bridge] Error in handleTelegramCallback:', err);
     }
   }
 
   // Long polling loop
   async function startTelegramPolling() {
     if (!botToken) {
-      console.info('[dsh-sound-notifier] Telegram token not configured in ~/.dsh/telegram.json.');
+      console.info('[dsh-telegram-bridge] Telegram token not configured in ~/.dsh/telegram.json.');
       return;
     }
 
@@ -1715,16 +1715,16 @@ export function apply(ctx, config = {}) {
       const meRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
       const me = await meRes.json();
       if (!me.ok) {
-        console.warn('[dsh-sound-notifier] Telegram bot token invalid:', me.description);
+        console.warn('[dsh-telegram-bridge] Telegram bot token invalid:', me.description);
         return;
       }
-      console.info(`[dsh-sound-notifier] Telegram Bot active: @${me.result.username}`);
+      console.info(`[dsh-telegram-bridge] Telegram Bot active: @${me.result.username}`);
       await syncBotCommands(botToken);
       if (!botChatId) {
-        console.info(`[dsh-sound-notifier] Send /start to @${me.result.username} to pair your Telegram chat.`);
+        console.info(`[dsh-telegram-bridge] Send /start to @${me.result.username} to pair your Telegram chat.`);
       }
     } catch (e) {
-      console.warn('[dsh-sound-notifier] Telegram connection check failed:', e.message);
+      console.warn('[dsh-telegram-bridge] Telegram connection check failed:', e.message);
     }
 
     let offset = 0;
@@ -2166,5 +2166,5 @@ export function apply(ctx, config = {}) {
     abortController.abort();
   });
 
-  console.info('[dsh-sound-notifier] Active: Sounds + Desktop Notification + 2-way Telegram Bot (Vision, Voice, Shell, Files, Workspaces, Action Bar).');
+  console.info('[dsh-telegram-bridge] Active: Sounds + Desktop Notification + 2-way Telegram Bot (Vision, Voice, Shell, Files, Workspaces, Action Bar).');
 }

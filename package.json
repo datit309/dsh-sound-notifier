@@ -1,7 +1,7 @@
 {
-  "name": "dsh-sound-notifier",
+  "name": "dsh-telegram-bridge",
   "version": "1.0.0",
-  "description": "Sound, desktop notification and 2-way Telegram bot for DeepSeek Harness (DSH)",
+  "description": "Full 2-way Telegram Remote Control, Vision, Voice, Shell, Diff & Sound Notifications for DeepSeek Harness (DSH)",
   "type": "module",
   "main": "index.js",
   "exports": {

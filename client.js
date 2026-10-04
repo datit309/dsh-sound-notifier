@@ -1,16 +1,16 @@
 window.__ModuleLoader__.load({
-  id: 'dsh-sound-notifier',
+  id: 'dsh-telegram-bridge',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
     const { useState, useEffect } = React;
 
     function TelegramSettingsForm(props) {
-      // If rendered in plugins.detail.section, only render for dsh-sound-notifier
+      // If rendered in plugins.detail.section, only render for dsh-telegram-bridge
       if (props?.subject !== undefined) {
         const subject = props.subject;
-        const isMatching = (subject?.kind === 'bundle' && subject?.pkg?.name === 'dsh-sound-notifier') ||
-                           (subject?.kind === 'row' && (subject?.row?.rowId === 'dsh-sound-notifier' || subject?.pkg?.name === 'dsh-sound-notifier'));
+        const isMatching = (subject?.kind === 'bundle' && subject?.pkg?.name === 'dsh-telegram-bridge') ||
+                           (subject?.kind === 'row' && (subject?.row?.rowId === 'dsh-telegram-bridge' || subject?.pkg?.name === 'dsh-telegram-bridge'));
         if (!isMatching) return null;
       }
 
@@ -26,7 +26,7 @@ window.__ModuleLoader__.load({
       const [saving, setSaving] = useState(false);
 
       useEffect(() => {
-        fetch('/api/dsh-sound-notifier/config')
+        fetch('/api/dsh-telegram-bridge/config')
           .then(res => res.json())
           .then(data => {
             if (data.ok && data.config) {
@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
               setBotInfo(data.botInfo || null);
             }
           })
-          .catch(e => console.warn('[dsh-sound-notifier] fetch config error:', e))
+          .catch(e => console.warn('[dsh-telegram-bridge] fetch config error:', e))
           .finally(() => setLoading(false));
       }, []);
 
@@ -46,7 +46,7 @@ window.__ModuleLoader__.load({
         setSaving(true);
         setStatusMsg('Đang lưu cấu hình...');
         try {
-          const res = await fetch('/api/dsh-sound-notifier/config', {
+          const res = await fetch('/api/dsh-telegram-bridge/config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ token, chatId, sound, notification, volume }),
@@ -69,7 +69,7 @@ window.__ModuleLoader__.load({
       const handleTest = async () => {
         setStatusMsg('Đang gửi tin nhắn kiểm tra...');
         try {
-          const res = await fetch('/api/dsh-sound-notifier/test', {
+          const res = await fetch('/api/dsh-telegram-bridge/test', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ token, chatId }),
@@ -261,16 +261,16 @@ window.__ModuleLoader__.load({
             order: 25,
             label: () => 'Telegram & Notifier',
           }, TelegramSettingsForm));
-        }, 'dsh-sound-notifier: telegram section in settings modal');
+        }, 'dsh-telegram-bridge: telegram section in settings modal');
 
         // 2. Also register into plugins detail page (sidebar panellist puzzle piece)
         ctx.effect(() => {
           return ctx.slots.inject('plugins.detail.section', () => ctx.slots.register({
             name: 'plugins.detail.section',
-            id: 'dsh-sound-notifier-telegram-config',
+            id: 'dsh-telegram-bridge-telegram-config',
             order: 10
           }, TelegramSettingsForm));
-        }, 'dsh-sound-notifier: telegram config in plugins detail section');
+        }, 'dsh-telegram-bridge: telegram config in plugins detail section');
       }
     };
   }
