@@ -5,12 +5,14 @@ window.__ModuleLoader__.load({
     const h = React.createElement;
     const { useState, useEffect } = React;
 
-    function TelegramConfigSection(props) {
-      const subject = props?.subject;
-      const isMatching = (subject?.kind === 'bundle' && subject?.pkg?.name === 'dsh-sound-notifier') ||
-                         (subject?.kind === 'row' && (subject?.row?.rowId === 'dsh-sound-notifier' || subject?.pkg?.name === 'dsh-sound-notifier'));
-
-      if (!isMatching) return null;
+    function TelegramSettingsForm(props) {
+      // If rendered in plugins.detail.section, only render for dsh-sound-notifier
+      if (props?.subject !== undefined) {
+        const subject = props.subject;
+        const isMatching = (subject?.kind === 'bundle' && subject?.pkg?.name === 'dsh-sound-notifier') ||
+                           (subject?.kind === 'row' && (subject?.row?.rowId === 'dsh-sound-notifier' || subject?.pkg?.name === 'dsh-sound-notifier'));
+        if (!isMatching) return null;
+      }
 
       const [token, setToken] = useState('');
       const [chatId, setChatId] = useState('');
@@ -85,29 +87,35 @@ window.__ModuleLoader__.load({
       };
 
       if (loading) {
-        return h('div', { style: { padding: '16px', color: '#888' } }, 'Đang nạp cấu hình Telegram...');
+        return h('div', { style: { padding: '24px', color: '#888' } }, 'Đang tải cấu hình Telegram...');
       }
 
       return h('div', {
         style: {
-          marginTop: '16px',
-          padding: '18px 20px',
-          borderRadius: '8px',
-          border: '1px solid var(--dsw-alias-border-subtle, rgba(255,255,255,0.12))',
-          background: 'var(--dsw-alias-surface-raised, rgba(255,255,255,0.03))',
+          padding: '24px',
+          maxWidth: '680px',
           display: 'flex',
           flexDirection: 'column',
-          gap: '14px',
-          fontSize: '13px'
+          gap: '20px',
+          fontSize: '13px',
+          color: 'var(--dsw-alias-label-primary, inherit)'
         }
       },
-        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-          h('h4', { style: { margin: 0, fontSize: '14px', fontWeight: 600 } }, '🤖 Cấu hình Telegram & Thông báo'),
-          botInfo ? h('span', { style: { fontSize: '11px', color: '#10b981', background: 'rgba(16,185,129,0.1)', padding: '3px 8px', borderRadius: '4px', fontWeight: 500 } }, `🟢 @${botInfo.username}`) : h('span', { style: { fontSize: '11px', color: '#f59e0b' } }, 'Chưa kết nối bot')
+        // Header
+        h('div', { style: { borderBottom: '1px solid var(--dsw-alias-border-subtle, rgba(255,255,255,0.1))', paddingBottom: '14px' } },
+          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' } },
+            h('h2', { style: { margin: 0, fontSize: '18px', fontWeight: 600 } }, '🤖 Telegram Bot & Thông báo'),
+            botInfo
+              ? h('span', { style: { fontSize: '12px', color: '#10b981', background: 'rgba(16,185,129,0.12)', padding: '4px 10px', borderRadius: '6px', fontWeight: 500 } }, `🟢 @${botInfo.username}`)
+              : h('span', { style: { fontSize: '12px', color: '#f59e0b', background: 'rgba(245,158,11,0.12)', padding: '4px 10px', borderRadius: '6px' } }, 'Chưa kết nối bot')
+          ),
+          h('p', { style: { margin: 0, fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #888)' } },
+            'Điều khiển Agent từ điện thoại (nhắn prompt, gửi ảnh, chạy lệnh shell, git diff, duyệt tool) và phát âm thanh khi xong việc.'
+          )
         ),
         // Field: Bot Token
-        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
-          h('label', { style: { fontWeight: 500 } }, 'Telegram Bot Token (lấy từ @BotFather):'),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+          h('label', { style: { fontWeight: 600, fontSize: '13px' } }, 'Telegram Bot Token:'),
           h('div', { style: { display: 'flex', gap: '8px' } },
             h('input', {
               type: showToken ? 'text' : 'password',
@@ -116,10 +124,10 @@ window.__ModuleLoader__.load({
               placeholder: '123456789:AAHDw3P1VKaD5NukdfMEmK23k...',
               style: {
                 flex: 1,
-                padding: '7px 10px',
+                padding: '8px 12px',
                 borderRadius: '6px',
                 border: '1px solid var(--dsw-alias-border-subtle, rgba(255,255,255,0.2))',
-                background: 'var(--dsw-alias-surface-input, rgba(0,0,0,0.2))',
+                background: 'var(--dsw-alias-surface-input, rgba(0,0,0,0.15))',
                 color: 'inherit',
                 fontSize: '13px'
               }
@@ -128,7 +136,7 @@ window.__ModuleLoader__.load({
               type: 'button',
               onClick: () => setShowToken(!showToken),
               style: {
-                padding: '4px 12px',
+                padding: '6px 14px',
                 borderRadius: '6px',
                 cursor: 'pointer',
                 background: 'transparent',
@@ -137,61 +145,88 @@ window.__ModuleLoader__.load({
                 fontSize: '12px'
               }
             }, showToken ? 'Ẩn' : 'Hiện')
+          ),
+          h('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-secondary, #888)' } },
+            'Token nhận được từ @BotFather khi tạo bot trên Telegram.'
           )
         ),
         // Field: Chat ID
-        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
-          h('label', { style: { fontWeight: 500 } }, 'Telegram Chat ID:'),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+          h('label', { style: { fontWeight: 600, fontSize: '13px' } }, 'Telegram Chat ID (Tài khoản của bạn):'),
           h('input', {
             type: 'text',
             value: chatId,
             onChange: (e) => setChatId(e.target.value),
-            placeholder: 'Ví dụ: 557260074 (hoặc để trống để tự pair qua /start)...',
+            placeholder: 'Ví dụ: 557260074 (để trống và gửi /start vào bot để tự động điền)...',
             style: {
-              padding: '7px 10px',
+              padding: '8px 12px',
               borderRadius: '6px',
               border: '1px solid var(--dsw-alias-border-subtle, rgba(255,255,255,0.2))',
-              background: 'var(--dsw-alias-surface-input, rgba(0,0,0,0.2))',
+              background: 'var(--dsw-alias-surface-input, rgba(0,0,0,0.15))',
               color: 'inherit',
               fontSize: '13px'
             }
-          })
+          }),
+          h('span', { style: { fontSize: '11px', color: 'var(--dsw-alias-label-secondary, #888)' } },
+            'Chỉ tài khoản mang Chat ID này mới có quyền điều khiển Agent từ xa để bảo vệ an toàn.'
+          )
         ),
-        // Toggles
-        h('div', { style: { display: 'flex', gap: '24px', alignItems: 'center' } },
-          h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' } },
+        // Sound & Notification Toggles
+        h('div', {
+          style: {
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '10px',
+            padding: '14px',
+            borderRadius: '8px',
+            background: 'var(--dsw-alias-surface-raised, rgba(255,255,255,0.03))',
+            border: '1px solid var(--dsw-alias-border-subtle, rgba(255,255,255,0.08))'
+          }
+        },
+          h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 500 } },
             h('input', {
               type: 'checkbox',
               checked: sound,
               onChange: (e) => setSound(e.target.checked)
             }),
-            'Phát âm thanh loa Mac (Hero / Basso)'
+            '🔊 Phát âm thanh loa máy Mac (Hero / Basso)'
           ),
-          h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' } },
+          h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 500 } },
             h('input', {
               type: 'checkbox',
               checked: notification,
               onChange: (e) => setNotification(e.target.checked)
             }),
-            'Hiện banner thông báo macOS'
+            '🔔 Hiện banner thông báo trên màn hình macOS'
           )
         ),
         // Status Message
-        statusMsg ? h('div', { style: { fontSize: '12px', fontWeight: 500, color: statusMsg.startsWith('✅') || statusMsg.startsWith('🚀') ? '#10b981' : '#f59e0b' } }, statusMsg) : null,
+        statusMsg
+          ? h('div', {
+              style: {
+                padding: '8px 12px',
+                borderRadius: '6px',
+                fontSize: '12px',
+                fontWeight: 500,
+                background: statusMsg.startsWith('✅') || statusMsg.startsWith('🚀') ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                color: statusMsg.startsWith('✅') || statusMsg.startsWith('🚀') ? '#10b981' : '#ef4444'
+              }
+            }, statusMsg)
+          : null,
         // Action Buttons
-        h('div', { style: { display: 'flex', gap: '10px', marginTop: '6px' } },
+        h('div', { style: { display: 'flex', gap: '12px', marginTop: '4px' } },
           h('button', {
             type: 'button',
             onClick: handleSave,
             disabled: saving,
             style: {
-              padding: '7px 18px',
+              padding: '9px 22px',
               borderRadius: '6px',
-              cursor: 'pointer',
+              cursor: saving ? 'not-allowed' : 'pointer',
               background: 'var(--dsw-alias-brand-primary, #2563eb)',
               color: '#fff',
               border: 'none',
-              fontWeight: 500,
+              fontWeight: 600,
               fontSize: '13px'
             }
           }, saving ? 'Đang lưu...' : '💾 Lưu cấu hình'),
@@ -200,16 +235,17 @@ window.__ModuleLoader__.load({
             onClick: handleTest,
             disabled: !token || !chatId,
             style: {
-              padding: '7px 14px',
+              padding: '9px 18px',
               borderRadius: '6px',
               cursor: !token || !chatId ? 'not-allowed' : 'pointer',
               background: 'transparent',
               border: '1px solid var(--dsw-alias-border-subtle, rgba(255,255,255,0.2))',
               color: 'inherit',
-              opacity: !token || !chatId ? 0.5 : 1,
+              opacity: !token || !chatId ? 0.4 : 1,
+              fontWeight: 500,
               fontSize: '13px'
             }
-          }, '🚀 Gửi tin nhắn kiểm tra')
+          }, '🚀 Gửi tin nhắn test Telegram')
         )
       );
     }
@@ -217,12 +253,23 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       apply(ctx) {
+        // 1. Register into Settings modal (sidebar bottom gear icon -> Telegram section)
+        ctx.effect(() => {
+          return ctx.slots.inject('settings.section', () => ctx.slots.register({
+            name: 'settings.section',
+            id: 'telegram',
+            order: 25,
+            label: () => 'Telegram & Notifier',
+          }, TelegramSettingsForm));
+        }, 'dsh-sound-notifier: telegram section in settings modal');
+
+        // 2. Also register into plugins detail page (sidebar panellist puzzle piece)
         ctx.effect(() => {
           return ctx.slots.inject('plugins.detail.section', () => ctx.slots.register({
             name: 'plugins.detail.section',
             id: 'dsh-sound-notifier-telegram-config',
             order: 10
-          }, TelegramConfigSection));
+          }, TelegramSettingsForm));
         }, 'dsh-sound-notifier: telegram config in plugins detail section');
       }
     };
