@@ -2,7 +2,7 @@
 
 [English](README.md) | [Tiếng Việt](README.vi.md)
 
-Plugin điều khiển từ xa 2 chiều qua Telegram & Thông báo âm thanh toàn diện cho DeepSeek Harness (DSH).
+Plugin điều khiển từ xa 2 chiều qua Telegram, theo dõi tiến trình thời gian thực & Thông báo âm thanh toàn diện cho DeepSeek Harness (DSH).
 
 Biến Telegram trên điện thoại thành trung tâm chỉ huy lập trình cho Agent trên máy Mac: gửi prompt, gửi voice, gửi ảnh màn hình lỗi, chạy lệnh terminal, tải file, xem git diff, đổi model, phê duyệt công cụ, và nhận tiến trình thời gian thực.
 
@@ -69,7 +69,79 @@ Biến Telegram trên điện thoại thành trung tâm chỉ huy lập trình c
 
 ---
 
-## Cấu hình
+## Hướng dẫn cài đặt vào DSH
+
+### Cách 1: Sử dụng DSH CLI (Khuyên dùng)
+
+Chạy lệnh chuẩn `dsh plugin add` trong terminal của bạn:
+
+```bash
+# Cài đặt trực tiếp từ GitHub vào profile đang dùng (ví dụ: web)
+dsh plugin --profile web add github:datit309/dsh-telegram-bridge
+```
+
+Hoặc cài đặt từ bản clone trên máy:
+
+```bash
+# Clone repository về máy
+git clone https://github.com/datit309/dsh-telegram-bridge.git ~/GIC/Freelancer/dsh-telegram-bridge
+
+# Cài đặt vào profile DSH
+dsh plugin --profile web add ~/GIC/Freelancer/dsh-telegram-bridge
+```
+
+> Lệnh `dsh plugin add` sẽ tự động ghi dependency vào `~/.dsh/profiles/web/package.json` và kích hoạt bundle layer trong `dsh.profile.bundles`.
+
+---
+
+### Cách 2: Sử dụng giao diện DSH Web GUI
+
+1. Mở DeepSeek Harness Web GUI (`http://127.0.0.1:3080`).
+2. Bấm vào icon **Plugins (mảnh ghép)** ở thanh sidebar ngoài cùng bên trái.
+3. Bấm nút **Thêm plugin (Add plugin)** ở góc trên bên phải.
+4. Nhập đường dẫn GitHub:
+   ```text
+   github:datit309/dsh-telegram-bridge
+   ```
+5. Bấm **Cài đặt (Install)**. DSH sẽ tự động tải, đóng gói và kích hoạt plugin.
+
+---
+
+### Cách 3: Cài đặt thủ công (Dành cho nhà phát triển)
+
+1. Thêm gói vào `~/.dsh/profiles/web/package.json`:
+
+```json
+{
+  "dependencies": {
+    "dsh-telegram-bridge": "file:/Users/trantandat/GIC/Freelancer/dsh-telegram-bridge"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-telegram-bridge"
+      ]
+    }
+  }
+}
+```
+
+2. Tạo symlink vào `node_modules` (nếu phát triển cục bộ không qua pnpm install):
+```bash
+ln -sf /Users/trantandat/GIC/Freelancer/dsh-telegram-bridge ~/.dsh/profiles/web/node_modules/dsh-telegram-bridge
+```
+
+3. Bật plugin trong `~/.dsh/profiles/web/cordis.patch.yml`:
+```yaml
+- id: dsh-telegram-bridge
+  name: "dsh-telegram-bridge"
+```
+
+---
+
+## Cấu hình Bot
 
 ### Cách 1: File `~/.dsh/telegram.json` (Khuyên dùng)
 Tạo hoặc chỉnh sửa file `~/.dsh/telegram.json`:
@@ -83,33 +155,26 @@ Tạo hoặc chỉnh sửa file `~/.dsh/telegram.json`:
 > **Mẹo tự động nhận `chatId`**: Nếu để trống `chatId`, bạn chỉ cần gửi tin nhắn `/start` tới bot từ điện thoại, bot sẽ tự lưu `chatId` của bạn và khóa quyền cho tài khoản đó.
 
 ### Cách 2: Giao diện DSH Web GUI
-Vào **Settings (icon bánh răng góc dưới bên trái) ➔ Telegram & Notifier**: Chỉnh sửa Token, Chat ID, bật/tắt âm thanh và bấm **Lưu cấu hình**.
+Vào **Settings (icon bánh răng góc dưới bên trái) ➔ Telegram & Notifier**: Chỉnh sửa Token, Chat ID, công tắc bật/tắt âm thanh và bấm **Lưu cấu hình**.
+
+### Cách 3: Biến môi trường
+```bash
+export TELEGRAM_BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
+export TELEGRAM_CHAT_ID="YOUR_TELEGRAM_CHAT_ID"
+```
 
 ---
 
-## Cài đặt vào DSH Profile
+## Khởi động và sử dụng
 
-1. Khai báo vào `~/.dsh/profiles/web/package.json`:
-```json
-{
-  "dependencies": {
-    "dsh-telegram-bridge": "file:/Users/trantandat/GIC/Freelancer/dsh-telegram-bridge"
-  },
-  "dsh": {
-    "profile": {
-      "bundles": [
-        "dsh-telegram-bridge"
-      ]
-    }
-  }
-}
+Khởi động lại dịch vụ DSH:
+
+```bash
+# Nếu dsh web đang chạy, nhấn Ctrl+C để dừng, sau đó:
+dsh web
 ```
 
-2. Kích hoạt trong `~/.dsh/profiles/web/cordis.patch.yml`:
-```yaml
-- id: dsh-telegram-bridge
-  name: "dsh-telegram-bridge"
-```
+Mở app Telegram trên điện thoại, tìm bot của bạn và gửi tin nhắn `/start`.
 
 ---
 

@@ -69,6 +69,78 @@ Turn your phone into a remote coding cockpit for your local DSH agent: send text
 
 ---
 
+## Installation Guide for DSH
+
+### Option 1: Via DSH CLI (Recommended)
+
+Run the standard `dsh plugin add` command in your terminal:
+
+```bash
+# Install directly from GitHub into your active profile (e.g. web)
+dsh plugin --profile web add github:datit309/dsh-telegram-bridge
+```
+
+Or install from a local checkout:
+
+```bash
+# Clone the repository
+git clone https://github.com/datit309/dsh-telegram-bridge.git ~/GIC/Freelancer/dsh-telegram-bridge
+
+# Install into DSH profile
+dsh plugin --profile web add ~/GIC/Freelancer/dsh-telegram-bridge
+```
+
+> `dsh plugin add` automatically records the dependency in `~/.dsh/profiles/web/package.json` and activates the bundle layer in `dsh.profile.bundles`.
+
+---
+
+### Option 2: Via DSH Web GUI
+
+1. Open DeepSeek Harness Web GUI (`http://127.0.0.1:3080`).
+2. Click the **Plugins icon (puzzle piece)** in the far-left sidebar.
+3. Click **Add plugin** in the top-right corner.
+4. Enter the GitHub repository specifier:
+   ```text
+   github:datit309/dsh-telegram-bridge
+   ```
+5. Click **Install**. The plugin will be downloaded, bundled, and activated automatically.
+
+---
+
+### Option 3: Manual Setup (Local Development)
+
+1. Add the package to `~/.dsh/profiles/web/package.json`:
+
+```json
+{
+  "dependencies": {
+    "dsh-telegram-bridge": "file:/Users/trantandat/GIC/Freelancer/dsh-telegram-bridge"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-telegram-bridge"
+      ]
+    }
+  }
+}
+```
+
+2. Symlink into `node_modules` (if developing locally without pnpm install):
+```bash
+ln -sf /Users/trantandat/GIC/Freelancer/dsh-telegram-bridge ~/.dsh/profiles/web/node_modules/dsh-telegram-bridge
+```
+
+3. Enable in `~/.dsh/profiles/web/cordis.patch.yml`:
+```yaml
+- id: dsh-telegram-bridge
+  name: "dsh-telegram-bridge"
+```
+
+---
+
 ## Configuration
 
 ### Method 1: `~/.dsh/telegram.json` (Recommended)
@@ -93,35 +165,16 @@ export TELEGRAM_CHAT_ID="YOUR_TELEGRAM_CHAT_ID"
 
 ---
 
-## Installation in DSH Profile
+## Running
 
-1. Register in `~/.dsh/profiles/web/package.json`:
-```json
-{
-  "dependencies": {
-    "dsh-telegram-bridge": "file:/Users/trantandat/GIC/Freelancer/dsh-telegram-bridge"
-  },
-  "dsh": {
-    "profile": {
-      "bundles": [
-        "dsh-telegram-bridge"
-      ]
-    }
-  }
-}
-```
+Restart your DSH web service:
 
-2. Enable in `~/.dsh/profiles/web/cordis.patch.yml`:
-```yaml
-- id: dsh-telegram-bridge
-  name: "dsh-telegram-bridge"
-```
-
-3. Restart `dsh web`:
 ```bash
-killall node  # or restart the terminal running dsh web
+# If dsh web is currently running, stop it with Ctrl+C, then:
 dsh web
 ```
+
+Open Telegram on your phone, find your bot, and send `/start`.
 
 ---
 
