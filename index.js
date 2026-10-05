@@ -579,6 +579,8 @@ export function apply(ctx, config = {}) {
 
   const pendingApprovals = new Map();
   const pendingQuestions = new Map();
+  let approvalCounter = 0;
+  let questionCounter = 0;
 
   const abortController = new AbortController();
   const signal = abortController.signal;
@@ -1428,11 +1430,12 @@ export function apply(ctx, config = {}) {
       return;
     }
 
-    // Check if user is replying to a pending question
+    // Check if user is replying to a pending question with text
     if (pendingQuestions.size > 0) {
-      const [latestCallId, item] = [...pendingQuestions.entries()].pop();
-      pendingQuestions.delete(latestCallId);
-      const qId = item.questions?.[0]?.id || 'question';
+      const [latestQKey, item] = [...pendingQuestions.entries()].pop();
+      pendingQuestions.delete(latestQKey);
+      const firstQ = item.questions?.[0];
+      const qId = item.qId || firstQ?.id || 'question';
       item.resolve({
         answers: [{
           id: qId,
@@ -1667,15 +1670,16 @@ export function apply(ctx, config = {}) {
       }
 
       if (data.startsWith('appr:')) {
-        const [, action, reqId] = data.split(':');
-        const resolve = pendingApprovals.get(reqId);
-        if (resolve) {
-          pendingApprovals.delete(reqId);
+        const [, action, apprKey] = data.split(':');
+        const item = pendingApprovals.get(apprKey);
+        if (item) {
+          pendingApprovals.delete(apprKey);
           const approved = action === 'allow';
-          resolve(approved ? 'allowed-once' : 'rejected');
+          item.resolve(approved ? 'allowed-once' : 'rejected');
+          const toolLabel = item.toolName ? `: \`${item.toolName}\`` : '';
           const confirmText = approved
-            ? '✅ *Đã cho phép thao tác (xác nhận từ Telegram)*'
-            : '❌ *Đã từ chối thao tác (từ Telegram)*';
+            ? `✅ *Đã cho phép thực thi*${toolLabel} _(xác nhận từ Telegram)_`
+            : `❌ *Đã từ chối thực thi*${toolLabel} _(từ Telegram)_`;
           if (msgId) await tgEdit(chatId, msgId, confirmText);
           else await tgSend(confirmText);
         }
@@ -1683,14 +1687,14 @@ export function apply(ctx, config = {}) {
       }
 
       if (data.startsWith('ask:')) {
-        const [, callId, optIdxStr] = data.split(':');
-        const item = pendingQuestions.get(callId);
+        const [, qKey, optIdxStr] = data.split(':');
+        const item = pendingQuestions.get(qKey);
         if (item) {
-          pendingQuestions.delete(callId);
+          pendingQuestions.delete(qKey);
           const idx = Number.parseInt(optIdxStr, 10);
-          const q = item.questions?.[0];
-          const selectedLabel = q?.options?.[idx]?.label || 'Đồng ý';
-          const qId = q?.id || 'question';
+          const firstQ = item.questions?.[0];
+          const selectedLabel = firstQ?.options?.[idx]?.label || 'Đồng ý';
+          const qId = item.qId || firstQ?.id || 'question';
           item.resolve({
             answers: [{
               id: qId,
@@ -1762,25 +1766,27 @@ export function apply(ctx, config = {}) {
   // Start polling in background
   startTelegramPolling();
 
-  // DSH Approval Hook: Allow approval from Telegram OR Web GUI
+  // DSH Approval Hook: Allow approval from Telegram OR Web GUI (prepend to run before web remotes)
   ctx.on('approval/request', async (req, next) => {
-    if (!botToken || !botChatId) return next();
+    if (!botToken || !botChatId) return typeof next === 'function' ? next() : Promise.resolve('unavailable');
 
     const toolName = req.toolName || req.tool?.name || 'Thao tác';
     const reason = req.reason || 'Yêu cầu quyền thực thi';
-    const project = req.session ? getProjectName(req.session) : 'DSH';
+    const session = req.agent?.session || getActiveSession();
+    const project = getProjectName(session);
+
+    const apprKey = `a_${Date.now()}_${++approvalCounter}`;
 
     tgSend(
-      `⚠️ *Yêu cầu phê duyệt công cụ*\n` +
-      `• *Project*: \`${project}\`\n` +
+      `⚠️ *Yêu cầu phê duyệt công cụ* [${project}]\n\n` +
       `• *Công cụ*: \`${toolName}\`\n` +
       `• *Lý do*: ${reason}`,
       {
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '✅ Cho phép', callback_data: `appr:allow:${req.id}` },
-              { text: '❌ Từ chối', callback_data: `appr:reject:${req.id}` },
+              { text: '✅ Cho phép', callback_data: `appr:allow:${apprKey}` },
+              { text: '❌ Từ chối', callback_data: `appr:reject:${apprKey}` },
             ],
           ],
         },
@@ -1788,47 +1794,92 @@ export function apply(ctx, config = {}) {
     );
 
     return new Promise((resolve) => {
-      pendingApprovals.set(req.id, resolve);
-      next().then((outcome) => {
-        if (pendingApprovals.has(req.id)) {
-          pendingApprovals.delete(req.id);
-          resolve(outcome);
-        }
-      });
-    });
-  });
+      pendingApprovals.set(apprKey, { id: req.id, toolName, resolve });
 
-  // DSH Question Hook: Allow answering from Telegram
-  ctx.on('user-questions/request', async (req, next) => {
-    if (!botToken || !botChatId) return typeof next === 'function' ? next() : undefined;
+      if (req.signal) {
+        req.signal.addEventListener('abort', () => {
+          if (pendingApprovals.has(apprKey)) {
+            pendingApprovals.delete(apprKey);
+            resolve('cancelled');
+          }
+        }, { once: true });
+      }
 
-    const firstQ = req.questions?.[0];
-    if (!firstQ) return typeof next === 'function' ? next() : undefined;
-
-    const project = req.session ? getProjectName(req.session) : 'DSH';
-    const buttons = (firstQ.options || []).map((opt, idx) => [
-      { text: opt.label, callback_data: `ask:${req.callId}:${idx}` },
-    ]);
-
-    tgSend(
-      `❓ *Câu hỏi từ Agent [${project}]*\n\n` +
-      `"${firstQ.question}"\n\n` +
-      (buttons.length > 0 ? '_Bấm nút bên dưới hoặc gõ trực tiếp câu trả lời:_' : '_Gõ câu trả lời của bạn vào đây:_'),
-      buttons.length > 0 ? { reply_markup: { inline_keyboard: buttons } } : {},
-    );
-
-    return new Promise((resolve) => {
-      pendingQuestions.set(req.callId, { resolve, questions: req.questions });
       if (typeof next === 'function') {
-        next().then((outcome) => {
-          if (pendingQuestions.has(req.callId)) {
-            pendingQuestions.delete(req.callId);
+        Promise.resolve().then(next).then((outcome) => {
+          if (outcome && outcome !== 'unavailable' && pendingApprovals.has(apprKey)) {
+            pendingApprovals.delete(apprKey);
             resolve(outcome);
           }
+        }).catch(() => {
+          // Ignore downstream rejection (e.g. no web client connected), keep waiting for Telegram
         });
       }
     });
-  });
+  }, { prepend: true });
+
+  // DSH Question Hook: Allow answering from Telegram (prepend to run before web remotes)
+  ctx.on('user-questions/request', async (req, next) => {
+    if (!botToken || !botChatId) return typeof next === 'function' ? next() : Promise.reject(new Error('no answerer'));
+
+    const firstQ = req.questions?.[0];
+    if (!firstQ) return typeof next === 'function' ? next() : Promise.reject(new Error('no question'));
+
+    const session = req.agent?.session || getActiveSession();
+    const project = getProjectName(session);
+    const qKey = `q_${Date.now()}_${++questionCounter}`;
+
+    const isPlanReview = firstQ.intent?.kind === 'plan-review';
+    let textToSend = '';
+
+    if (isPlanReview) {
+      const planExcerpt = firstQ.detail ? `\n\n📖 *Kế hoạch thực hiện:*\n\`\`\`markdown\n${truncateLines(firstQ.detail, 2500)}\n\`\`\`` : '';
+      textToSend = `📋 *Kế hoạch đã sẵn sàng (Plan Review)* [${project}]${planExcerpt}\n\n❓ *${firstQ.question}*`;
+    } else {
+      const headerPrefix = firstQ.header ? `*${firstQ.header}*: ` : '';
+      const detailText = firstQ.detail ? `\n\n_${truncateLines(firstQ.detail, 1000)}_` : '';
+      textToSend = `❓ *${headerPrefix}${firstQ.question}* [${project}]${detailText}\n\n_Bấm nút bên dưới hoặc gõ trực tiếp câu trả lời:_`;
+    }
+
+    const buttons = (firstQ.options || []).map((opt, idx) => {
+      let label = opt.label;
+      if (opt.label === 'Approve') label = '✅ Phê duyệt (Approve)';
+      else if (opt.label === 'Keep planning') label = '🔄 Yêu cầu sửa lại (Keep planning)';
+      return [{ text: label, callback_data: `ask:${qKey}:${idx}` }];
+    });
+
+    const replyMarkup = buttons.length > 0 ? { reply_markup: { inline_keyboard: buttons } } : {};
+    tgSend(textToSend, replyMarkup);
+
+    return new Promise((resolve, reject) => {
+      pendingQuestions.set(qKey, {
+        resolve,
+        reject,
+        questions: req.questions,
+        qId: firstQ.id,
+      });
+
+      if (req.signal) {
+        req.signal.addEventListener('abort', () => {
+          if (pendingQuestions.has(qKey)) {
+            pendingQuestions.delete(qKey);
+            reject(req.signal.reason);
+          }
+        }, { once: true });
+      }
+
+      if (typeof next === 'function') {
+        Promise.resolve().then(next).then((outcome) => {
+          if (outcome && pendingQuestions.has(qKey)) {
+            pendingQuestions.delete(qKey);
+            resolve(outcome);
+          }
+        }).catch(() => {
+          // Ignore downstream rejection (e.g. NO_PROVIDER from tail), keep waiting for Telegram!
+        });
+      }
+    });
+  }, { prepend: true });
 
   // Session Event Observer
   ctx.on('session/event', (session, event) => {
