@@ -1,76 +1,78 @@
 # dsh-telegram-bridge
 
-Plugin điều khiển từ xa 2 chiều qua Telegram & Thông báo âm thanh toàn diện cho DeepSeek Harness (DSH).
+[English](README.md) | [Tiếng Việt](README.vi.md)
 
-Biến Telegram trên điện thoại thành trung tâm chỉ huy lập trình cho Agent trên máy Mac: gửi prompt, gửi voice, gửi ảnh màn hình lỗi, chạy lệnh terminal, tải file, xem git diff, đổi model, phê duyệt công cụ, và nhận tiến trình thời gian thực.
+Full two-way Telegram remote control, real-time progress tracking, and native OS notifications for DeepSeek Harness (DSH).
 
----
-
-## Tính năng nổi bật
-
-### 1. Tương tác & Lập trình từ xa qua Telegram
-- 💬 **Prompting từ xa**: Gõ bất kỳ tin nhắn nào trong chat Telegram, Agent trên máy Mac sẽ nhận lệnh và thực thi ngay.
-- 🎙 **Voice to Text**: Bấm giữ gửi Voice Message (`.ogg`), bot dùng Gemini AI chuyển giọng nói thành văn bản rồi nạp vào prompt cho Agent.
-- 📷 **Vision / Screenshot**: Gửi ảnh chụp màn hình terminal hoặc lỗi giao diện kèm chú thích, Agent tự động phân tích ảnh và sửa code.
-- 📁 **Document Upload**: Gửi file code/tài liệu (`.pdf`, `.txt`, `.sql`, `.js`, `.py`) từ điện thoại lên máy Mac để Agent đọc và xử lý.
-- ⚡ **Live Progress Card**: Khi Agent chạy, bot cập nhật tiến trình từng bước thời gian thực (đọc file, sửa code, chạy lệnh) trong 1 tin nhắn duy nhất, không gây spam thông báo.
-- 🔘 **Action Bar sau mỗi lượt**: Kết thúc lượt chạy, tin nhắn kết quả tự đính kèm các nút bấm 1-chạm (`[ 📄 Xem Diff ]`, `[ 📁 File đã sửa ]`, `[ 🚀 Git Status ]`, `[ 🔇 Tắt loa ]`, `[ 🔄 Session mới ]`).
-
-### 2. Quản lý Mã nguồn & Hệ thống
-- 📄 **Xem Git Diff (`/diff`)**: Hiển thị chi tiết các dòng code vừa thêm/bớt trong workspace đang chọn.
-- 🚀 **Git Commit & Push (`/commit <message>`)**: Tự động `git add`, `git commit` và `git push` thẳng lên GitHub ngay từ điện thoại.
-- 💻 **Chạy Shell trực tiếp (`/sh <lệnh>`)**: Thực thi lệnh terminal trực tiếp trên máy Mac (như `git status`, `pnpm test`, `docker ps`) và nhận kết quả ngay (0 token).
-- 📥 **Tải File về điện thoại (`/get <file>`)**: Tải bất kỳ file nào từ máy Mac về Telegram với 1 chạm (trong `/files`) hoặc gõ lệnh `/get`.
-- 🎁 **Tự động gửi file bàn giao**: Khi Agent gọi công cụ `present` bàn giao file kết quả, bot tự động gửi file đính kèm về Telegram.
-
-### 3. Quản lý Session & Workspace
-- 📋 **Chuyển đổi Session (`/sessions`, `/switch <số>`)**: Xem danh sách các phiên chat và chuyển đổi linh hoạt bằng nút bấm hoặc số thứ tự.
-- 📂 **Chuyển đổi Workspace (`/workspaces`, `/cd <đường dẫn>`)**: Xem danh sách các thư mục dự án và chuyển thư mục làm việc của Agent.
-- 🧠 **Đổi Model AI (`/model`)**: Chuyển đổi giữa các model mạnh nhất (Gemini 3.8 Flash, Claude 4.6 Sonnet, GPT-6 Astra, v.v.) bằng nút bấm.
-- 🔄 **Tạo Session mới (`/new`)**: Mở phiên làm việc mới từ xa.
-
-### 4. Phê duyệt & Bảo mật
-- 🛡 **Nút bấm Phê duyệt (Approval)**: Khi Agent gọi công cụ cần quyền (`approval/asked`), bot hiển thị 2 nút `[ ✅ Cho phép ]` và `[ ❌ Từ chối ]`.
-- ❓ **Trả lời Câu hỏi (User Questions)**: Khi Agent hỏi ý kiến (`ask_user_question`), bot hiển thị danh sách lựa chọn bằng nút bấm inline.
-- 🔒 **Khóa Chat ID**: Chỉ tài khoản Telegram được ủy quyền mới có quyền điều khiển, người lạ nhắn sẽ bị từ chối 403.
-
-### 5. Âm thanh & Desktop Notifications (Native OS)
-- 🔊 **Âm thanh loa Mac**: Phát chuông `Hero.aiff` (hoàn thành), `Basso.aiff` (lỗi), `Ping.aiff` (cần tương tác) qua lệnh `afplay`.
-- 🔔 **Banner macOS**: Đẩy thông báo kèm tiêu đề project, thời gian xử lý và danh sách file đã sửa.
-- 🔇 **Bật/Tắt chuông từ xa (`/mute`, `/unmute`)**: Chuyển chế độ im lặng loa Mac khi cần yên tĩnh ban đêm.
+Turn your phone into a remote coding cockpit for your local DSH agent: send text prompts, voice messages, screenshots, inspect live diffs, switch models/sessions, execute shell commands, approve tools, and download generated deliverables.
 
 ---
 
-## Bảng menu lệnh Telegram (Nút `[/]`)
+## Key Features
 
-| Lệnh | Chức năng |
+### 1. Two-Way Remote Control via Telegram
+- 💬 **Remote Prompting**: Send any text message in Telegram; the active agent on your Mac receives and runs it immediately.
+- 🎙 **Voice-to-Text**: Hold to record a voice message (`.ogg`). The bot converts audio via `ffmpeg` + Gemini speech-to-text into a clean text prompt for the agent.
+- 📷 **Vision / Screenshots**: Send terminal or UI bug screenshots with optional captions; the agent parses the image and fixes the code.
+- 📁 **Document Upload**: Send `.pdf`, `.sql`, `.json`, `.py`, `.js`, `.txt` files directly to your agent's workspace.
+- ⚡ **Live Progress Card**: Dynamically updates tool execution steps (`read`, `edit`, `bash`, `serena`, etc.) in a single message with typing indicators, preventing notification spam.
+- 🔘 **Post-Turn Action Bar**: Every completed turn includes one-touch inline buttons: `[ 📄 View Diff ]`, `[ 📁 Modified Files ]`, `[ 🚀 Git Status ]`, `[ 🔇 Mute/Unmute ]`, `[ 🔄 New Session ]`.
+
+### 2. Source Code & System Management
+- 📄 **Live Git Diff (`/diff`)**: View detailed staged and unstaged code changes within the active workspace.
+- 🚀 **Git Commit & Push (`/commit <message>`)**: Run `git add -A && git commit -m <msg> && git push` directly from your phone.
+- 💻 **Direct Shell Execution (`/sh <command>`)**: Run terminal commands (e.g. `git status`, `pnpm test`, `docker ps`, `pm2 status`) locally with zero LLM token cost.
+- 📥 **One-Touch File Download (`/get <file>`)**: Download files from your host machine with one click in `/files` or via `/get <path>`.
+- 🎁 **Deliverable Auto-Delivery**: When the agent calls the `present` tool, generated deliverables are automatically uploaded to your Telegram chat.
+
+### 3. Session & Workspace Navigation
+- 📋 **Session Switching (`/sessions`, `/switch <index>`)**: List all open DSH sessions and switch active targets with inline buttons or indices.
+- 📂 **Workspace Switching (`/workspaces`, `/cd <path>`)**: Browse project directories and change working directories on the fly.
+- 🧠 **Model Switcher (`/model`)**: Switch between models (Gemini 3.8 Flash, Claude 4.6 Sonnet, GPT-6 Astra, etc.) via interactive inline buttons.
+- 🔄 **New Session (`/new`)**: Spawn a fresh session in the active workspace.
+
+### 4. Interactive Permissions & Security
+- 🛡 **Tool Approval Buttons**: When an agent requests elevated permissions (`approval/asked`), the bot prompts with `[ ✅ Allow ]` and `[ ❌ Reject ]`.
+- ❓ **User Questions (`ask_user_question`)**: Interactive single/multi-choice buttons for agent questions.
+- 🔒 **Chat ID Locking**: Only authorized Telegram chat IDs can interact; unauthorized access receives a 403 response.
+
+### 5. Native OS Audio & Desktop Notifications
+- 🔊 **System Audio**: Native macOS audio alerts via `afplay` (`Hero.aiff` on success, `Basso.aiff` on error, `Ping.aiff` on prompt/approval).
+- 🔔 **Desktop Banners**: macOS Notification Center banners with project name, execution time, and modified file list.
+- 🔇 **Remote Mute (`/mute`, `/unmute`)**: Mute Mac speakers from your phone when you need silence.
+
+---
+
+## Telegram Command Reference
+
+| Command | Description |
 |:--- |:--- |
-| **Gửi Voice Message** | Tự động chuyển giọng nói thành văn bản và chạy prompt |
-| **Gửi Ảnh + Caption** | Đưa ảnh chụp màn hình cho Agent đọc và fix bug |
-| **Gửi File Tài liệu** | Gửi file đính kèm để Agent đọc và xử lý |
-| `/diff` | Xem git diff mã nguồn vừa sửa đổi trong workspace |
-| `/commit <msg>` | Commit & push git nhanh lên remote GitHub |
-| `/sh <lệnh>` | Chạy lệnh terminal trực tiếp trên máy Mac (0 token) |
-| `/get <file>` | Tải file từ máy Mac về điện thoại qua Telegram |
-| `/files` | Xem danh sách file vừa sửa (kèm nút bấm tải 1-chạm) |
-| `/workspaces` | Danh sách các thư mục dự án và nút bấm chuyển đổi |
-| `/cd <đường dẫn>` | Chuyển thư mục làm việc của Agent |
-| `/model` | Mở menu đổi Model AI bằng nút bấm |
-| `/sessions` | Xem danh sách & chuyển đổi Session chat |
-| `/switch <số>` | Đổi nhanh sang session tương ứng |
-| `/mute` | Tắt âm thanh loa Mac (chỉ rung thông báo trên Telegram) |
-| `/unmute` | Bật lại âm thanh loa Mac |
-| `/new` | Mở phiên làm việc mới |
-| `/status` | Xem trạng thái Agent, Session, Workspace, Loa Mac |
-| `/stop` | Dừng khẩn cấp lượt chạy |
-| `/help` | Xem hướng dẫn sử dụng chi tiết |
+| **Send Voice Message** | Converts speech to text and dispatches as a prompt |
+| **Send Photo + Caption** | Attaches screenshot for vision-based bug fixing |
+| **Send Document** | Uploads code or docs into workspace for analysis |
+| `/diff` | Displays git diff for the active workspace |
+| `/commit <msg>` | Commits and pushes changes to git remote |
+| `/sh <command>` | Runs shell commands directly on host (0 tokens) |
+| `/get <file>` | Downloads file from host machine to Telegram |
+| `/files` | Lists recently modified files with 1-click download buttons |
+| `/workspaces` | Lists available workspaces with quick-switch buttons |
+| `/cd <path>` | Changes agent's working directory |
+| `/model` | Opens interactive model selection menu |
+| `/sessions` | Lists open sessions with quick-switch buttons |
+| `/switch <index>` | Switches to session by index or ID |
+| `/mute` | Mutes Mac speaker sounds |
+| `/unmute` | Unmutes Mac speaker sounds |
+| `/new` | Spawns a new session |
+| `/status` | Shows status of agent, session, workspace, and speaker |
+| `/stop` | Aborts current agent turn immediately |
+| `/help` | Displays help message and command list |
 
 ---
 
-## Cấu hình
+## Configuration
 
-### Cách 1: File `~/.dsh/telegram.json` (Khuyên dùng)
-Tạo hoặc chỉnh sửa file `~/.dsh/telegram.json`:
+### Method 1: `~/.dsh/telegram.json` (Recommended)
+Create or edit `~/.dsh/telegram.json`:
 ```json
 {
   "token": "YOUR_TELEGRAM_BOT_TOKEN",
@@ -78,16 +80,22 @@ Tạo hoặc chỉnh sửa file `~/.dsh/telegram.json`:
 }
 ```
 
-> **Mẹo tự động nhận `chatId`**: Nếu để trống `chatId`, bạn chỉ cần gửi tin nhắn `/start` tới bot từ điện thoại, bot sẽ tự lưu `chatId` của bạn và khóa quyền cho tài khoản đó.
+> **Auto-Pairing**: Leave `chatId` empty, then send `/start` to your bot from your phone. The bot will automatically lock to your chat ID.
 
-### Cách 2: Giao diện DSH Web GUI
-Vào **Settings (icon bánh răng góc dưới bên trái) ➔ Telegram & Notifier**: Chỉnh sửa Token, Chat ID, bật/tắt âm thanh và bấm **Lưu cấu hình**.
+### Method 2: DSH Web GUI
+Navigate to **Settings (gear icon in lower-left) ➔ Telegram & Notifier**: Configure Token, Chat ID, sound/notification toggles, and click **Save**.
+
+### Method 3: Environment Variables
+```bash
+export TELEGRAM_BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
+export TELEGRAM_CHAT_ID="YOUR_TELEGRAM_CHAT_ID"
+```
 
 ---
 
-## Cài đặt vào DSH Profile
+## Installation in DSH Profile
 
-1. Khai báo vào `~/.dsh/profiles/web/package.json`:
+1. Register in `~/.dsh/profiles/web/package.json`:
 ```json
 {
   "dependencies": {
@@ -103,10 +111,16 @@ Vào **Settings (icon bánh răng góc dưới bên trái) ➔ Telegram & Notifi
 }
 ```
 
-2. Kích hoạt trong `~/.dsh/profiles/web/cordis.patch.yml`:
+2. Enable in `~/.dsh/profiles/web/cordis.patch.yml`:
 ```yaml
 - id: dsh-telegram-bridge
   name: "dsh-telegram-bridge"
+```
+
+3. Restart `dsh web`:
+```bash
+killall node  # or restart the terminal running dsh web
+dsh web
 ```
 
 ---
