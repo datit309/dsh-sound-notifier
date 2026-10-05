@@ -1776,6 +1776,11 @@ export function apply(ctx, config = {}) {
     const project = getProjectName(session);
 
     const apprKey = `a_${Date.now()}_${++approvalCounter}`;
+    const bridgeAbort = new AbortController();
+    const origSignal = req.signal;
+    req.signal = origSignal
+      ? AbortSignal.any([origSignal, bridgeAbort.signal])
+      : bridgeAbort.signal;
 
     tgSend(
       `⚠️ *Yêu cầu phê duyệt công cụ* [${project}]\n\n` +
@@ -1794,12 +1799,20 @@ export function apply(ctx, config = {}) {
     );
 
     return new Promise((resolve) => {
-      pendingApprovals.set(apprKey, { id: req.id, toolName, resolve });
+      pendingApprovals.set(apprKey, {
+        id: req.id,
+        toolName,
+        resolve: (outcome) => {
+          bridgeAbort.abort(new Error('decided via telegram'));
+          resolve(outcome);
+        },
+      });
 
-      if (req.signal) {
-        req.signal.addEventListener('abort', () => {
+      if (origSignal) {
+        origSignal.addEventListener('abort', () => {
           if (pendingApprovals.has(apprKey)) {
             pendingApprovals.delete(apprKey);
+            bridgeAbort.abort(origSignal.reason);
             resolve('cancelled');
           }
         }, { once: true });
@@ -1809,6 +1822,7 @@ export function apply(ctx, config = {}) {
         Promise.resolve().then(next).then((outcome) => {
           if (outcome && outcome !== 'unavailable' && pendingApprovals.has(apprKey)) {
             pendingApprovals.delete(apprKey);
+            bridgeAbort.abort(new Error('decided via web'));
             resolve(outcome);
           }
         }).catch(() => {
@@ -1828,6 +1842,12 @@ export function apply(ctx, config = {}) {
     const session = req.agent?.session || getActiveSession();
     const project = getProjectName(session);
     const qKey = `q_${Date.now()}_${++questionCounter}`;
+
+    const bridgeAbort = new AbortController();
+    const origSignal = req.signal;
+    req.signal = origSignal
+      ? AbortSignal.any([origSignal, bridgeAbort.signal])
+      : bridgeAbort.signal;
 
     const isPlanReview = firstQ.intent?.kind === 'plan-review';
     let textToSend = '';
@@ -1853,17 +1873,24 @@ export function apply(ctx, config = {}) {
 
     return new Promise((resolve, reject) => {
       pendingQuestions.set(qKey, {
-        resolve,
-        reject,
+        resolve: (ans) => {
+          bridgeAbort.abort(new Error('answered via telegram'));
+          resolve(ans);
+        },
+        reject: (err) => {
+          bridgeAbort.abort(err);
+          reject(err);
+        },
         questions: req.questions,
         qId: firstQ.id,
       });
 
-      if (req.signal) {
-        req.signal.addEventListener('abort', () => {
+      if (origSignal) {
+        origSignal.addEventListener('abort', () => {
           if (pendingQuestions.has(qKey)) {
             pendingQuestions.delete(qKey);
-            reject(req.signal.reason);
+            bridgeAbort.abort(origSignal.reason);
+            reject(origSignal.reason);
           }
         }, { once: true });
       }
@@ -1872,6 +1899,7 @@ export function apply(ctx, config = {}) {
         Promise.resolve().then(next).then((outcome) => {
           if (outcome && pendingQuestions.has(qKey)) {
             pendingQuestions.delete(qKey);
+            bridgeAbort.abort(new Error('answered via web'));
             resolve(outcome);
           }
         }).catch(() => {
