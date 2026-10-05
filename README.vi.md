@@ -84,10 +84,10 @@ Hoặc cài đặt từ bản clone trên máy:
 
 ```bash
 # Clone repository về máy
-git clone https://github.com/datit309/dsh-telegram-bridge.git ~/GIC/Freelancer/dsh-telegram-bridge
+git clone https://github.com/datit309/dsh-telegram-bridge.git ~/dsh-telegram-bridge
 
 # Cài đặt vào profile DSH
-dsh plugin --profile web add ~/GIC/Freelancer/dsh-telegram-bridge
+dsh plugin --profile web add ~/dsh-telegram-bridge
 ```
 
 > Lệnh `dsh plugin add` sẽ tự động ghi dependency vào `~/.dsh/profiles/web/package.json` và kích hoạt bundle layer trong `dsh.profile.bundles`.
@@ -114,7 +114,7 @@ dsh plugin --profile web add ~/GIC/Freelancer/dsh-telegram-bridge
 ```json
 {
   "dependencies": {
-    "dsh-telegram-bridge": "file:/Users/trantandat/GIC/Freelancer/dsh-telegram-bridge"
+    "dsh-telegram-bridge": "file:/path/to/dsh-telegram-bridge"
   },
   "dsh": {
     "profile": {
@@ -130,7 +130,7 @@ dsh plugin --profile web add ~/GIC/Freelancer/dsh-telegram-bridge
 
 2. Tạo symlink vào `node_modules` (nếu phát triển cục bộ không qua pnpm install):
 ```bash
-ln -sf /Users/trantandat/GIC/Freelancer/dsh-telegram-bridge ~/.dsh/profiles/web/node_modules/dsh-telegram-bridge
+ln -sf /path/to/dsh-telegram-bridge ~/.dsh/profiles/web/node_modules/dsh-telegram-bridge
 ```
 
 3. Bật plugin trong `~/.dsh/profiles/web/cordis.patch.yml`:

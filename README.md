@@ -84,10 +84,10 @@ Or install from a local checkout:
 
 ```bash
 # Clone the repository
-git clone https://github.com/datit309/dsh-telegram-bridge.git ~/GIC/Freelancer/dsh-telegram-bridge
+git clone https://github.com/datit309/dsh-telegram-bridge.git ~/dsh-telegram-bridge
 
 # Install into DSH profile
-dsh plugin --profile web add ~/GIC/Freelancer/dsh-telegram-bridge
+dsh plugin --profile web add ~/dsh-telegram-bridge
 ```
 
 > `dsh plugin add` automatically records the dependency in `~/.dsh/profiles/web/package.json` and activates the bundle layer in `dsh.profile.bundles`.
@@ -114,7 +114,7 @@ dsh plugin --profile web add ~/GIC/Freelancer/dsh-telegram-bridge
 ```json
 {
   "dependencies": {
-    "dsh-telegram-bridge": "file:/Users/trantandat/GIC/Freelancer/dsh-telegram-bridge"
+    "dsh-telegram-bridge": "file:/path/to/dsh-telegram-bridge"
   },
   "dsh": {
     "profile": {
@@ -130,7 +130,7 @@ dsh plugin --profile web add ~/GIC/Freelancer/dsh-telegram-bridge
 
 2. Symlink into `node_modules` (if developing locally without pnpm install):
 ```bash
-ln -sf /Users/trantandat/GIC/Freelancer/dsh-telegram-bridge ~/.dsh/profiles/web/node_modules/dsh-telegram-bridge
+ln -sf /path/to/dsh-telegram-bridge ~/.dsh/profiles/web/node_modules/dsh-telegram-bridge
 ```
 
 3. Enable in `~/.dsh/profiles/web/cordis.patch.yml`:

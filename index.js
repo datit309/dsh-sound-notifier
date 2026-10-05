@@ -334,7 +334,11 @@ function listAvailableWorkspaces(ctx) {
     }
   } catch {}
 
-  const baseDirs = ['/Users/trantandat/GIC/Freelancer', process.cwd()];
+  const baseDirs = [process.cwd()];
+  try {
+    const parentDir = join(process.cwd(), '..');
+    if (existsSync(parentDir)) baseDirs.push(parentDir);
+  } catch {}
   for (const b of baseDirs) {
     if (existsSync(b)) {
       if (!set.has(b)) set.set(b, { title: basename(b), path: b });
