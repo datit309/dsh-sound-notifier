@@ -215,6 +215,11 @@ function summarizeToolCall(name, args) {
   return `Gọi \`${name}\``;
 }
 
+// Last-processed time on every outgoing/edited message (edits keep Telegram's original timestamp).
+function stamp(text) {
+  return `${text}\n\n🕐 ${new Date().toLocaleString('vi-VN', { hour12: false })}`;
+}
+
 function splitMessage(text, maxLen = 3800) {
   if (text.length <= maxLen) return [text];
   const chunks = [];
@@ -553,7 +558,7 @@ export function apply(ctx, config = {}) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   chat_id: testChatId,
-                  text: '🚀 *Tin nhắn kiểm tra từ Giao diện DSH Web GUI!*\nCấu hình Telegram Bot đã hoạt động hoàn hảo.',
+                  text: stamp('🚀 *Tin nhắn kiểm tra từ Giao diện DSH Web GUI!*\nCấu hình Telegram Bot đã hoạt động hoàn hảo.'),
                   parse_mode: 'Markdown',
                 }),
               });
@@ -587,6 +592,7 @@ export function apply(ctx, config = {}) {
 
   async function tgSend(text, options = {}) {
     if (!botToken || !botChatId || !text) return null;
+    text = stamp(text);
     try {
       const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
@@ -642,7 +648,7 @@ export function apply(ctx, config = {}) {
       const fileBuffer = readFileSync(filePath);
       const form = new FormData();
       form.append('chat_id', botChatId);
-      if (caption) form.append('caption', caption);
+      form.append('caption', stamp(caption).trim());
       const blob = new Blob([fileBuffer]);
       form.append('document', blob, basename(filePath));
 
@@ -659,6 +665,7 @@ export function apply(ctx, config = {}) {
 
   async function tgEdit(chatId, messageId, text, options = {}) {
     if (!botToken || !messageId) return null;
+    text = stamp(text);
     try {
       const res = await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
         method: 'POST',
