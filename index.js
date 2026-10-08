@@ -4,6 +4,15 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync,
 import { randomUUID } from 'node:crypto';
 import z from '@deepseek-ai/schemastery';
 
+// Ensure .volatile() exists on Schemastery prototype across all runtime versions
+const schemaProto = Object.getPrototypeOf(z.string());
+if (schemaProto && typeof schemaProto.volatile !== 'function') {
+  schemaProto.volatile = function volatile() {
+    if (this.meta?.volatile) return this;
+    return this.extra('volatile', true);
+  };
+}
+
 export const name = 'dsh-telegram-bridge';
 export const inject = ['sessions', 'agents'];
 
